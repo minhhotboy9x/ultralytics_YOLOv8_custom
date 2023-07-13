@@ -1,4 +1,4 @@
-# [YOLOv8 pruning](benchmarks\prunability\yolov8_pruning.py)
+# [YOLOv8 pruning](benchmarks/prunability/yolov8_pruning.py)
 
 ## 1. [tp.pruner.MagnitudePruner](torch_pruning/pruner/algorithms/metapruner.py)
     
@@ -102,7 +102,7 @@ for i in range(iterative_steps):
 ### 2.1 Quá trình train của yolov8
     Khởi tạo model: YOLO("model.pt")
     Bắt đầu train: model.train(...)
-Khi gọi model.train của đối tượng YOLO, một chuỗi các func được gọi đến nhau, hàm thực hiện training cho mô hình sau chuỗi func được gọi là ```_do_train``` trong [trainer.py](ultralytics\yolo\engine\trainer.py). 
+Khi gọi model.train của đối tượng YOLO, một chuỗi các func được gọi đến nhau, hàm thực hiện training cho mô hình sau chuỗi func được gọi là ```_do_train``` trong [trainer.py](ultralytics/yolo/engine/trainer.py). 
 
 ### 2.2 Vấn đề khi prune yolov8
 Khi đưa model v8 vào ```pruner``` và gọi ```pruner.step()```, lỗi sẽ xảy ra ở module ```C2f```. Để giải quyết, ```C2f_v2``` được tạo ra để thay thế ```C2f``` cũ trong model. 

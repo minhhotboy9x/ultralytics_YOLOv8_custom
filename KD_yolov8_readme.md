@@ -1,7 +1,7 @@
-# [YOLOv8 KD ver1](yolov8_KD\KD_training.py) 
+# [YOLOv8 KD ver1](yolov8_KD/KD_training.py) 
 KD sử dụng feature map
 
-![imitation_mask](https://private-user-images.githubusercontent.com/85445183/253155913-8cda2d93-e453-4c56-901e-c76036c09fec.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJrZXkxIiwiZXhwIjoxNjg5MjIyMDc1LCJuYmYiOjE2ODkyMjE3NzUsInBhdGgiOiIvODU0NDUxODMvMjUzMTU1OTEzLThjZGEyZDkzLWU0NTMtNGM1Ni05MDFlLWM3NjAzNmMwOWZlYy5wbmc_WC1BbXotQWxnb3JpdGhtPUFXUzQtSE1BQy1TSEEyNTYmWC1BbXotQ3JlZGVudGlhbD1BS0lBSVdOSllBWDRDU1ZFSDUzQSUyRjIwMjMwNzEzJTJGdXMtZWFzdC0xJTJGczMlMkZhd3M0X3JlcXVlc3QmWC1BbXotRGF0ZT0yMDIzMDcxM1QwNDE2MTVaJlgtQW16LUV4cGlyZXM9MzAwJlgtQW16LVNpZ25hdHVyZT1lNTE5ZGNjODZlMzViMDhmOThmY2MwYTYyYmM0NWZhNjI1NTYwNzg4ODk4NjFlMDcwMTdjNjVjMmY2NGM3MWJhJlgtQW16LVNpZ25lZEhlYWRlcnM9aG9zdCZhY3Rvcl9pZD0wJmtleV9pZD0wJnJlcG9faWQ9MCJ9.PyX0KlYENHArkrTA2NEudxvSTNna09BpPua29raXhHo)
+![imitation_mask](asset/imitation_mask.png)
 
 Sử dụng imitation mask để upscale feature của student sao cho khớp với feature size của teacher
 
@@ -81,7 +81,7 @@ DetectionModel(
 
 Dựa vào các id của các block (1, 2, 3, ...), ta trích xuất các feature map từ các đầu ra của các layer đó.
 
-![v8_architectutre](https://private-user-images.githubusercontent.com/85445183/253155918-ed051753-0fd0-4fe6-8f50-5ca29c02f7b4.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJrZXkxIiwiZXhwIjoxNjg5MjIyMDc1LCJuYmYiOjE2ODkyMjE3NzUsInBhdGgiOiIvODU0NDUxODMvMjUzMTU1OTE4LWVkMDUxNzUzLTBmZDAtNGZlNi04ZjUwLTVjYTI5YzAyZjdiNC5wbmc_WC1BbXotQWxnb3JpdGhtPUFXUzQtSE1BQy1TSEEyNTYmWC1BbXotQ3JlZGVudGlhbD1BS0lBSVdOSllBWDRDU1ZFSDUzQSUyRjIwMjMwNzEzJTJGdXMtZWFzdC0xJTJGczMlMkZhd3M0X3JlcXVlc3QmWC1BbXotRGF0ZT0yMDIzMDcxM1QwNDE2MTVaJlgtQW16LUV4cGlyZXM9MzAwJlgtQW16LVNpZ25hdHVyZT1kYjQ0NDQwY2Q4YzkzZjYwOGRjMTU5YWNlYjgwZTIzMWRmNTNiZjQ4ZWRiYTQ1NTYxOGU2NDIyMjBkOGQzZDg5JlgtQW16LVNpZ25lZEhlYWRlcnM9aG9zdCZhY3Rvcl9pZD0wJmtleV9pZD0wJnJlcG9faWQ9MCJ9.MTflPqxmDDEr4QFYy-4kITX_0Yp6kjZ5JevZFBgJuAk)
+![v8_architectutre](asset/v8_architectutre.png)
 
 ## 2. Implement
 * Định nghĩa lại các hàm train của các đổi tượng liên quan ```train_v2(self: YOLO,  **kwargs), trainer_train_v2(self: BaseTrainer), _do_train_v2(self: BaseTrainer, world_size=1)```
@@ -126,7 +126,7 @@ Dựa vào các id của các block (1, 2, 3, ...), ta trích xuất các featur
     parser.add_argument('--resume', type=bool, default=False, help="continue training (if KD, must provide teacher)")
     ```
 
-# [YOLOv8 KD ver2](yolov8_KD\KD_training_ver2.py) 
+# [YOLOv8 KD ver2](yolov8_KD/KD_training_ver2.py) 
 KD sử dụng output của mô hình
 
 ## 1. Output của yolov8 
