@@ -135,6 +135,9 @@ dmypy.json
 datasets/
 runs/
 wandb/
+KD/
+pruning/
+.vscode/
 
 .DS_Store
 

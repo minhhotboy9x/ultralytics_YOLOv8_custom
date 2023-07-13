@@ -3,9 +3,9 @@
 import json
 from time import time
 
-from ultralytics.hub.utils import PREFIX, traces
+from ultralytics.hub.utils import PREFIX, events
 from ultralytics.yolo.utils import LOGGER
-from ultralytics.yolo.utils.torch_utils import get_flops, get_num_params
+from ultralytics.yolo.utils.torch_utils import model_info_for_loggers
 
 
 def on_pretrain_routine_end(trainer):
@@ -24,11 +24,7 @@ def on_fit_epoch_end(trainer):
         # Upload metrics after val end
         all_plots = {**trainer.label_loss_items(trainer.tloss, prefix='train'), **trainer.metrics}
         if trainer.epoch == 0:
-            model_info = {
-                'model/parameters': get_num_params(trainer.model),
-                'model/GFLOPs': round(get_flops(trainer.model), 3),
-                'model/speed(ms)': round(trainer.validator.speed['inference'], 3)}
-            all_plots = {**all_plots, **model_info}
+            all_plots = {**all_plots, **model_info_for_loggers(trainer)}
         session.metrics_queue[trainer.epoch] = json.dumps(all_plots)
         if time() - session.timers['metrics'] > session.rate_limits['metrics']:
             session.upload_metrics()
@@ -61,23 +57,23 @@ def on_train_end(trainer):
 
 
 def on_train_start(trainer):
-    """Run traces on train start."""
-    traces(trainer.args, traces_sample_rate=1.0)
+    """Run events on train start."""
+    events(trainer.args)
 
 
 def on_val_start(validator):
-    """Runs traces on validation start."""
-    traces(validator.args, traces_sample_rate=1.0)
+    """Runs events on validation start."""
+    events(validator.args)
 
 
 def on_predict_start(predictor):
-    """Run traces on predict start."""
-    traces(predictor.args, traces_sample_rate=1.0)
+    """Run events on predict start."""
+    events(predictor.args)
 
 
 def on_export_start(exporter):
-    """Run traces on export start."""
-    traces(exporter.args, traces_sample_rate=1.0)
+    """Run events on export start."""
+    events(exporter.args)
 
 
 callbacks = {

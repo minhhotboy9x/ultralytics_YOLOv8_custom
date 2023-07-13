@@ -89,7 +89,7 @@ class AutoBackend(nn.Module):
 
         # NOTE: special case: in-memory pytorch model
         if nn_module:
-            model = weights.to(device)
+            model = weights.to(device) # type: DetectionModel
             model = model.fuse(verbose=verbose) if fuse else model
             if hasattr(model, 'kpt_shape'):
                 kpt_shape = model.kpt_shape  # pose-only
@@ -98,6 +98,7 @@ class AutoBackend(nn.Module):
             model.half() if fp16 else model.float()
             self.model = model  # explicitly assign for to(), cpu(), cuda(), half()
             pt = True
+
         elif pt:  # PyTorch
             from ultralytics.nn.tasks import attempt_load_weights
             model = attempt_load_weights(weights if isinstance(weights, list) else w,

@@ -203,7 +203,7 @@ class BasePredictor:
             self.done_warmup = True
 
         self.seen, self.windows, self.dt, self.batch = 0, [], (ops.Profile(), ops.Profile(), ops.Profile()), None
-        self.run_callbacks('on_predict_start')
+        # self.run_callbacks('on_predict_start')
         for batch in self.dataset:
             self.run_callbacks('on_predict_batch_start')
             self.batch = batch
@@ -218,6 +218,7 @@ class BasePredictor:
 
             # Inference
             with self.dt[1]:
+                # self.model: AutoBackend
                 preds = self.model(im, augment=self.args.augment, visualize=visualize)
 
             # Postprocess

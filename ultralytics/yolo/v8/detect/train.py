@@ -43,7 +43,7 @@ class DetectionTrainer(BaseTrainer):
             build_dataloader(self.args, batch_size, img_path=dataset_path, stride=gs, rank=rank, mode=mode,
                              rect=mode == 'val', data_info=self.data)[0]
 
-    def preprocess_batch(self, batch):
+    def preprocess_batch(self, batch): #preprocess_batch trong từng ảnh
         """Preprocesses a batch of images by scaling and converting to float."""
         batch['img'] = batch['img'].to(self.device, non_blocking=True).float() / 255
         return batch
@@ -58,9 +58,9 @@ class DetectionTrainer(BaseTrainer):
         self.model.args = self.args  # attach hyperparameters to model
         # TODO: self.model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc
 
-    def get_model(self, cfg=None, weights=None, verbose=True):
+    def get_model(self, cfg=None, weights=None, verbose=True): # dựng model
         """Return a YOLO detection model."""
-        model = DetectionModel(cfg, nc=self.data['nc'], verbose=verbose and RANK == -1)
+        model = DetectionModel(cfg, nc=self.data['nc'], verbose=verbose and RANK == -1) # load model từ file cfg
         if weights:
             model.load(weights)
         return model
@@ -126,10 +126,11 @@ class Loss:
         self.hyp = h
         self.stride = m.stride  # model strides
         self.nc = m.nc  # number of classes
-        self.no = m.no
+        self.no = m.no  # number of outputs per anchor
         self.reg_max = m.reg_max
         self.device = device
-
+        
+        # print(f'-------{self.reg_max}-------------') reg_max = 16
         self.use_dfl = m.reg_max > 1
 
         self.assigner = TaskAlignedAssigner(topk=10, num_classes=self.nc, alpha=0.5, beta=6.0)
@@ -166,6 +167,7 @@ class Loss:
         """Calculate the sum of the loss for box, cls and dfl multiplied by batch size."""
         loss = torch.zeros(3, device=self.device)  # box, cls, dfl
         feats = preds[1] if isinstance(preds, tuple) else preds
+
         pred_distri, pred_scores = torch.cat([xi.view(feats[0].shape[0], self.no, -1) for xi in feats], 2).split(
             (self.reg_max * 4, self.nc), 1)
 
@@ -205,7 +207,7 @@ class Loss:
         loss[0] *= self.hyp.box  # box gain
         loss[1] *= self.hyp.cls  # cls gain
         loss[2] *= self.hyp.dfl  # dfl gain
-
+        
         return loss.sum() * batch_size, loss.detach()  # loss(box, cls, dfl)
 
 

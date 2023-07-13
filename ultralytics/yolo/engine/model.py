@@ -18,15 +18,21 @@ from ultralytics.yolo.utils.torch_utils import smart_inference_mode
 # Map head to model, trainer, validator, and predictor classes
 TASK_MAP = {
     'classify': [
-        ClassificationModel, yolo.v8.classify.ClassificationTrainer, yolo.v8.classify.ClassificationValidator,
-        yolo.v8.classify.ClassificationPredictor],
+        # ClassificationModel, yolo.v8.classify.ClassificationTrainer, yolo.v8.classify.ClassificationValidator,
+        # yolo.v8.classify.ClassificationPredictor
+        ],
     'detect': [
         DetectionModel, yolo.v8.detect.DetectionTrainer, yolo.v8.detect.DetectionValidator,
-        yolo.v8.detect.DetectionPredictor],
+        yolo.v8.detect.DetectionPredictor
+        ],
     'segment': [
-        SegmentationModel, yolo.v8.segment.SegmentationTrainer, yolo.v8.segment.SegmentationValidator,
-        yolo.v8.segment.SegmentationPredictor],
-    'pose': [PoseModel, yolo.v8.pose.PoseTrainer, yolo.v8.pose.PoseValidator, yolo.v8.pose.PosePredictor]}
+        # SegmentationModel, yolo.v8.segment.SegmentationTrainer, yolo.v8.segment.SegmentationValidator,
+        # yolo.v8.segment.SegmentationPredictor
+        ],
+    'pose': [
+        # PoseModel, yolo.v8.pose.PoseTrainer, yolo.v8.pose.PoseValidator, yolo.v8.pose.PosePredictor
+        ]
+    }
 
 
 class YOLO:
@@ -105,6 +111,7 @@ class YOLO:
             self._new(model, task)
         else:
             self._load(model, task)
+        # print(f"model của bạn: {self.model}")
 
     def __call__(self, source=None, stream=False, **kwargs):
         """Calls the 'predict' function with given arguments to perform object detection."""
@@ -138,6 +145,7 @@ class YOLO:
         self.model = TASK_MAP[self.task][0](cfg_dict, verbose=verbose and RANK == -1)  # build model
         self.overrides['model'] = self.cfg
 
+        # print(f"model của bạn: {dir(self.model)}")
         # Below added to allow export from yamls
         args = {**DEFAULT_CFG_DICT, **self.overrides}  # combine model and default args, preferring model args
         self.model.args = {k: v for k, v in args.items() if k in DEFAULT_CFG_KEYS}  # attach args to model

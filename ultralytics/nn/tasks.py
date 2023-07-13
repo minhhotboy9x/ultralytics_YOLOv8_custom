@@ -22,7 +22,7 @@ class BaseModel(nn.Module):
     The BaseModel class serves as a base class for all the models in the Ultralytics YOLO family.
     """
 
-    def forward(self, x, profile=False, visualize=False):
+    def forward(self, x, profile=False, visualize=False, mask_id = []):
         """
         Forward pass of the model on a single scale.
         Wrapper for `_forward_once` method.
@@ -35,9 +35,9 @@ class BaseModel(nn.Module):
         Returns:
             (torch.Tensor): The output of the network.
         """
-        return self._forward_once(x, profile, visualize)
+        return self._forward_once(x, profile, visualize, mask_id)
 
-    def _forward_once(self, x, profile=False, visualize=False):
+    def _forward_once(self, x, profile=False, visualize=False, mask_id = []):
         """
         Perform a forward pass through the network.
 
@@ -49,7 +49,9 @@ class BaseModel(nn.Module):
         Returns:
             (torch.Tensor): The last output of the model.
         """
+        # print(mask_id)
         y, dt = [], []  # outputs
+        feature_mask = [] # outputs of mask i_th
         for m in self.model:
             if m.f != -1:  # if not from previous layer
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
@@ -60,6 +62,10 @@ class BaseModel(nn.Module):
             if visualize:
                 LOGGER.info('visualize feature not yet supported')
                 # TODO: feature_visualization(x, m.type, m.i, save_dir=visualize)
+            if m.i in mask_id:
+                feature_mask.append(x)
+        if feature_mask:
+            return x, feature_mask
         return x
 
     def _profile_one_layer(self, m, x, dt):
@@ -166,7 +172,7 @@ class BaseModel(nn.Module):
             LOGGER.info(f'Transferred {len(csd)}/{len(self.model.state_dict())} items from pretrained weights')
 
 
-class DetectionModel(BaseModel):
+class  DetectionModel(BaseModel):
     """YOLOv8 detection model."""
 
     def __init__(self, cfg='yolov8n.yaml', ch=3, nc=None, verbose=True):  # model, input channels, number of classes
@@ -179,6 +185,7 @@ class DetectionModel(BaseModel):
             LOGGER.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
             self.yaml['nc'] = nc  # override yaml value
         self.model, self.save = parse_model(deepcopy(self.yaml), ch=ch, verbose=verbose)  # model, savelist
+        
         self.names = {i: f'{i}' for i in range(self.yaml['nc'])}  # default names dict
         self.inplace = self.yaml.get('inplace', True)
 
@@ -198,13 +205,13 @@ class DetectionModel(BaseModel):
             self.info()
             LOGGER.info('')
 
-    def forward(self, x, augment=False, profile=False, visualize=False):
+    def forward(self, x, augment=False, profile=False, visualize=False, mask_id = []):
         """Run forward pass on input image(s) with optional augmentation and profiling."""
         if augment:
-            return self._forward_augment(x)  # augmented inference, None
-        return self._forward_once(x, profile, visualize)  # single-scale inference, train
+            return self._forward_augment(x, mask_id)  # augmented inference, None
+        return self._forward_once(x, profile, visualize, mask_id)  # single-scale inference, train
 
-    def _forward_augment(self, x):
+    def _forward_augment(self, x, mask_id = []):
         """Perform augmentations on input image x and return augmented inference and train outputs."""
         img_size = x.shape[-2:]  # height, width
         s = [1, 0.83, 0.67]  # scales
@@ -212,11 +219,12 @@ class DetectionModel(BaseModel):
         y = []  # outputs
         for si, fi in zip(s, f):
             xi = scale_img(x.flip(fi) if fi else x, si, gs=int(self.stride.max()))
-            yi = self._forward_once(xi)[0]  # forward
+            yi = self._forward_once(xi, mask_id)[0]  # forward
             # cv2.imwrite(f'img_{si}.jpg', 255 * xi[0].cpu().numpy().transpose((1, 2, 0))[:, :, ::-1])  # save
             yi = self._descale_pred(yi, fi, si, img_size)
             y.append(yi)
         y = self._clip_augmented(y)  # clip augmented tails
+        # print(f'-----------fw augment-----------------')
         return torch.cat(y, -1), None  # augmented inference, train
 
     @staticmethod

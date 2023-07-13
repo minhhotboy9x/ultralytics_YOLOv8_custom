@@ -81,12 +81,13 @@ class BaseTrainer:
         """
         self.args = get_cfg(cfg, overrides)
         self.device = select_device(self.args.device, self.args.batch)
+        # print(f'--------------------{self.args.data}-----------------------')
         self.check_resume()
         self.validator = None
         self.model = None
         self.metrics = None
         init_seeds(self.args.seed + 1 + RANK, deterministic=self.args.deterministic)
-
+        
         # Dirs
         project = self.args.project or Path(SETTINGS['runs_dir']) / self.args.task
         name = self.args.name or f'{self.args.mode}'
@@ -114,7 +115,8 @@ class BaseTrainer:
             self.args.workers = 0  # faster CPU training as time dominated by inference, not dataloading
 
         # Model and Dataset
-        self.model = self.args.model
+        self.model = self.args.model # type str
+        
         try:
             if self.args.task == 'classify':
                 self.data = check_cls_dataset(self.args.data)
@@ -145,6 +147,7 @@ class BaseTrainer:
         self.callbacks = _callbacks or callbacks.get_default_callbacks()
         if RANK in (-1, 0):
             callbacks.add_integration_callbacks(self)
+
 
     def add_callback(self, event: str, callback):
         """
@@ -273,7 +276,7 @@ class BaseTrainer:
         nb = len(self.train_loader)  # number of batches
         nw = max(round(self.args.warmup_epochs * nb), 100)  # number of warmup iterations
         last_opt_step = -1
-        self.run_callbacks('on_train_start')
+        # self.run_callbacks('on_train_start')
         LOGGER.info(f'Image sizes {self.args.imgsz} train, {self.args.imgsz} val\n'
                     f'Using {self.train_loader.num_workers * (world_size or 1)} dataloader workers\n'
                     f"Logging results to {colorstr('bold', self.save_dir)}\n"
@@ -318,8 +321,8 @@ class BaseTrainer:
                 # Forward
                 with torch.cuda.amp.autocast(self.amp):
                     batch = self.preprocess_batch(batch)
-                    preds = self.model(batch['img'])
-                    self.loss, self.loss_items = self.criterion(preds, batch)
+                    preds = self.model(batch['img']) # predict
+                    self.loss, self.loss_items = self.criterion(preds, batch) # cal loss
                     if RANK != -1:
                         self.loss *= world_size
                     self.tloss = (self.tloss * i + self.loss_items) / (i + 1) if self.tloss is not None \
@@ -469,7 +472,7 @@ class BaseTrainer:
         """Get model and raise NotImplementedError for loading cfg files."""
         raise NotImplementedError("This task trainer doesn't support loading cfg files")
 
-    def get_validator(self):
+    def rget_validato(self):
         """Returns a NotImplementedError when the get_validator function is called."""
         raise NotImplementedError('get_validator function not implemented in trainer')
 
