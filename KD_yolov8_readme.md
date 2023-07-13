@@ -1,7 +1,7 @@
 # [YOLOv8 KD ver1](yolov8_KD\KD_training.py) 
 KD sử dụng feature map
 
-![](yolov8_KD\imitation_mask.png)
+![imitation_mask](https://github.com/minhhotboy9x/ultralytics_YOLOv8_custom/assets/85445183/8cda2d93-e453-4c56-901e-c76036c09fec)
 Sử dụng imitation mask để upscale feature của student sao cho khớp với feature size của teacher
 
 ## 1. Trích xuất đặc trưng từ các đầu ra layer cụ thể
@@ -80,7 +80,7 @@ DetectionModel(
 
 Dựa vào các id của các block (1, 2, 3, ...), ta trích xuất các feature map từ các đầu ra của các layer đó.
 
-![](yolov8_KD\v8_architectutre.png)
+![v8_architectutre](https://github.com/minhhotboy9x/ultralytics_YOLOv8_custom/assets/85445183/ed051753-0fd0-4fe6-8f50-5ca29c02f7b4)
 
 ## 2. Implement
 * Định nghĩa lại các hàm train của các đổi tượng liên quan ```train_v2(self: YOLO,  **kwargs), trainer_train_v2(self: BaseTrainer), _do_train_v2(self: BaseTrainer, world_size=1)```
