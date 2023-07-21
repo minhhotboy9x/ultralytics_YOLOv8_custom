@@ -30,7 +30,7 @@ from ultralytics.yolo.v8.detect.train import DetectionModel
 from ultralytics.yolo.cfg import get_cfg
 from tqdm import tqdm
 
-def cal_kd_loss(self: BaseTrainer, student_preds, teacher_preds):
+def cal_kd_loss(self: BaseTrainer, student_preds, teacher_preds, T=3):
     m = self.model.model[-1]
     nc = m.nc  # number of classes
     no = m.no  # number of outputs per anchor
@@ -51,11 +51,11 @@ def cal_kd_loss(self: BaseTrainer, student_preds, teacher_preds):
     #-------------------------------KD loss----------------------------------------
     kl_loss = nn.KLDivLoss(reduction="mean")
 
-    stu_pred_scores = stu_pred_scores.sigmoid()
-    stu_pred_distri = stu_pred_distri.view(b, a, 4, c // 4).softmax(3)
+    stu_pred_scores = (stu_pred_scores/T).sigmoid()
+    stu_pred_distri = (stu_pred_distri/T).view(b, a, 4, c // 4).softmax(3)
 
-    tea_pred_scores = tea_pred_scores.sigmoid()
-    tea_pred_distri = tea_pred_distri.view(b, a, 4, c // 4).softmax(3)
+    tea_pred_scores = (tea_pred_scores/T).sigmoid()
+    tea_pred_distri = (tea_pred_distri/T).view(b, a, 4, c // 4).softmax(3)
 
     cl_loss = kl_loss(stu_pred_scores, tea_pred_scores)
     box_loss = kl_loss(stu_pred_distri, tea_pred_distri)
