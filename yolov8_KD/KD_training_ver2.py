@@ -30,12 +30,24 @@ from ultralytics.yolo.v8.detect.train import DetectionModel
 from ultralytics.yolo.cfg import get_cfg
 from tqdm import tqdm
 
-def cal_kd_loss(self: BaseTrainer, student_preds, teacher_preds, T=3):
+class KLDLoss(nn.Module):
+    def __init__(self):
+        super(KLDLoss, self).__init__()
+
+    def forward(self, y_pred, y_true):
+        # epsilon = 1e-7
+        loss = - torch.where(y_true != 0, y_true * (y_pred / y_true).log(), torch.tensor(0.0))
+        num_dims = y_pred.dim()
+        # keep_dims = tuple(range(1, num_dims))
+        return loss.sum(dim = num_dims-1).mean()
+
+    
+def cal_kd_loss(self: BaseTrainer, student_preds, teacher_preds, T=1.0):
     m = self.model.model[-1]
     nc = m.nc  # number of classes
     no = m.no  # number of outputs per anchor
     reg_max = m.reg_max
- 
+
     stu_pred_distri, stu_pred_scores = torch.cat([xi.view(student_preds[0].shape[0], no, -1) for xi in student_preds], 2).split(
             (reg_max * 4, nc), 1)
 
@@ -43,22 +55,34 @@ def cal_kd_loss(self: BaseTrainer, student_preds, teacher_preds, T=3):
     stu_pred_distri = stu_pred_distri.permute(0, 2, 1).contiguous() # batch, anchors, channels
     b, a, c = stu_pred_distri.shape  # batch, anchors, channels
 
-    tea_pred_distri, tea_pred_scores = torch.cat([xi.view(teacher_preds[0].shape[0], no, -1) for xi in student_preds], 2).split(
+    tea_pred_distri, tea_pred_scores = torch.cat([xi.view(teacher_preds[0].shape[0], no, -1) for xi in teacher_preds], 2).split(
             (reg_max * 4, nc), 1)
 
     tea_pred_scores = tea_pred_scores.permute(0, 2, 1).contiguous() # batch, anchors, channels
     tea_pred_distri = tea_pred_distri.permute(0, 2, 1).contiguous() # batch, anchors, channels
     #-------------------------------KD loss----------------------------------------
-    kl_loss = nn.KLDivLoss(reduction="mean")
+    kl_loss = KLDLoss()
+    bce_loss = nn.BCEWithLogitsLoss(reduction='mean')
 
-    stu_pred_scores = (stu_pred_scores/T).sigmoid()
+    stu_pred_scores = (stu_pred_scores/T)
     stu_pred_distri = (stu_pred_distri/T).view(b, a, 4, c // 4).softmax(3)
 
     tea_pred_scores = (tea_pred_scores/T).sigmoid()
     tea_pred_distri = (tea_pred_distri/T).view(b, a, 4, c // 4).softmax(3)
 
-    cl_loss = kl_loss(stu_pred_scores, tea_pred_scores)
+    cl_loss = bce_loss(stu_pred_scores, tea_pred_scores)
     box_loss = kl_loss(stu_pred_distri, tea_pred_distri)
+
+    # print(f'----------------size----------- {tea_pred_scores.shape} {tea_pred_distri.shape}')  # torch.Size([32, 8400, 80]) torch.Size([32, 8400, 4, 16])
+
+    # print(f'\n----------------kd_loss----------- {cl_loss} {box_loss}')
+
+    # print(f'\n---------------{stu_pred_scores[13, 4]}, \n { tea_pred_scores[13, 4]}')
+    # for i in range(8400):
+    #     tmp = kl_loss(stu_pred_scores[13, i], tea_pred_scores[13, i])
+    #     if torch.isnan(tmp):
+    #         print(f'\n----------------kd_loss----------- {i}: {kl_loss(stu_pred_scores[13, i], tea_pred_scores[13, i])} ')
+    #         break
 
     return 0.8*box_loss + 0.2*cl_loss
 
@@ -91,6 +115,7 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
         preds = self.model(dump_image)  # forward
         teacher_preds = self.teacher(dump_image) 
         self.cal_kd_loss = cal_kd_loss.__get__(self)
+        
         # print(self.cal_kd_loss(preds, teacher_preds)) # test kl loss
         
 
@@ -99,7 +124,7 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
         self.run_callbacks('on_train_epoch_start')
         self.model.train()
         if hasattr(self, 'teacher'):
-            self.teacher.eval() 
+            self.teacher.train() 
 
         if RANK != -1:
             self.train_loader.sampler.set_epoch(epoch)
@@ -148,11 +173,13 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
 
                 if RANK != -1:
                     self.loss *= world_size
+                    if hasattr(self, 'teacher'):
+                        self.kd_loss *= world_size
                 self.tloss = (self.tloss * i + self.loss_items) / (i + 1) if self.tloss is not None \
                     else self.loss_items
 
             # Backward
-            self.scaler.scale(self.loss + 0.2 * self.kd_loss).backward()
+            self.scaler.scale(0.8 + self.loss + 0.2 * self.kd_loss).backward()
 
             # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
             if ni - last_opt_step >= self.accumulate:
@@ -280,7 +307,6 @@ def train_v2(self: YOLO,  **kwargs):
     # get teacher for KD by adding teacher attribute for trainer of model
     if kwargs.get('teacher'):
         self.trainer.teacher = YOLO(kwargs['teacher']).model.to(self.trainer.device)
-        
 
     self.trainer.train_v2 = trainer_train_v2.__get__(self.trainer)
     self.trainer._do_train_v2 = _do_train_v2.__get__(self.trainer)

@@ -141,6 +141,8 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
 
                     if RANK != -1:
                         self.loss *= world_size
+                        if hasattr(self, 'teacher'):
+                            self.kd_loss *= world_size
                     self.tloss = (self.tloss * i + self.loss_items) / (i + 1) if self.tloss is not None \
                         else self.loss_items
 

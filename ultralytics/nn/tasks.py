@@ -66,6 +66,7 @@ class BaseModel(nn.Module):
                 feature_mask.append(x)
         if feature_mask:
             return x, feature_mask
+        # print(f'------------{type(x)}------------{len(x)}----------------')
         return x
 
     def _profile_one_layer(self, m, x, dt):
@@ -209,6 +210,7 @@ class  DetectionModel(BaseModel):
         """Run forward pass on input image(s) with optional augmentation and profiling."""
         if augment:
             return self._forward_augment(x, mask_id)  # augmented inference, None
+        # print(f'--------time---------------')
         return self._forward_once(x, profile, visualize, mask_id)  # single-scale inference, train
 
     def _forward_augment(self, x, mask_id = []):

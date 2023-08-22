@@ -424,7 +424,7 @@ if __name__ == "__main__":
     parser.add_argument('--data', default='coco128.yaml', help='dataset')
     parser.add_argument('--device', default=0, help='cpu or gpu')
     parser.add_argument('--project', default='pruning', help='project name')
-    parser.add_argument('--epochs', type=int, default=10, help='epochs')
+    parser.add_argument('--epochs', type=int, default=10, help='epochs each iterative-steps')
     parser.add_argument('--imgsz', type=int, default=640, help='Size of input images')
     parser.add_argument('--workers', type=int, default=4, help="number of worker threads for data loading (per RANK if DDP)")
 
