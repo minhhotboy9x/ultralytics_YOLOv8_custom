@@ -132,6 +132,9 @@ dmypy.json
 .pyre/
 
 # datasets and projects
+KD_feature/
+coco_kd/
+coco_128/
 datasets/
 runs/
 wandb/

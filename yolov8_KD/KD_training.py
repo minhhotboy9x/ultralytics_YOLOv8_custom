@@ -8,36 +8,60 @@ ultralytics_dir = os.path.abspath("./")
 # Thêm đường dẫn của folder cha vào sys.path
 sys.path.append(ultralytics_dir)
 
-from copy import deepcopy
-from datetime import datetime
-from pathlib import Path
-from typing import List, Union
 import numpy as np
 import torch
 import torch.nn as nn
-from matplotlib import pyplot as plt
 from ultralytics import YOLO, __version__
-from ultralytics.nn.modules import Detect, C2f, Conv, Bottleneck
 from ultralytics.nn.tasks import attempt_load_one_weight
 from ultralytics.yolo.engine.model import TASK_MAP
 from ultralytics.yolo.engine.trainer import BaseTrainer
 from ultralytics.yolo.utils import (yaml_load, LOGGER, RANK, DEFAULT_CFG_DICT, TQDM_BAR_FORMAT, 
                             DEFAULT_CFG_KEYS, DEFAULT_CFG, callbacks, clean_url, colorstr, emojis, yaml_save)
 from ultralytics.yolo.utils.checks import check_yaml
-from ultralytics.yolo.utils.torch_utils import initialize_weights, de_parallel
 from ultralytics.yolo.utils.dist import ddp_cleanup, generate_ddp_command
-from ultralytics.yolo.v8.detect.train import DetectionModel
+from ignite.metrics import SSIM
 from ultralytics.yolo.cfg import get_cfg
 from tqdm import tqdm
+from ultralytics.yolo.utils.callbacks.tensorboard import on_batch_end2, on_fit_epoch_end2
 
-def cal_kd_loss(student_preds, teacher_preds):
-    criterion = nn.MSELoss(reduction='sum')
-    total_element = 0
+class MinMaxRescalingLayer(nn.Module):
+    def __init__(self):
+        super(MinMaxRescalingLayer, self).__init__()
+
+    def forward(self, x, y):
+        min_val = torch.min(x.min(-1)[0].min(-1)[0], y.min(-1)[0].min(-1)[0])
+        max_val = torch.max(x.max(-1)[0].max(-1)[0], y.max(-1)[0].min(-1)[0])
+        rescaled_x = (x - min_val[:,:,None,None]) / (max_val[:,:,None,None] - min_val[:,:,None,None])
+        rescaled_y = (y - min_val[:,:,None,None]) / (max_val[:,:,None,None] - min_val[:,:,None,None])
+        return rescaled_x, rescaled_y
+
+class DSSIM(nn.Module):
+    def __init__(self, device = 'cpu'):
+        super(DSSIM, self).__init__()
+        self.device = device
+        self.cal = SSIM(data_range=1.0, device=self.device)
+        self.scaler = MinMaxRescalingLayer()
+
+    def forward(self, y_pred, y_true): 
+        y_pred_scaled, y_true_scaled = self.scaler(y_pred, y_true)
+        self.cal.reset()
+        self.cal.update((y_pred_scaled, y_true_scaled))
+        loss = self.cal.compute()
+        loss = (1-loss)/2
+        # print(f'------------{loss}--------------')
+        return loss
+
+def cal_kd_loss(student_preds, teacher_preds, type_kd_loss='DSSIM'):
+    if type_kd_loss.upper() == 'DSSIM':
+        criterion = DSSIM(device = student_preds[0].device)
+    else: # bất kì giá trị nào khác đều sử dụng mse loss
+        criterion = nn.MSELoss(reduction='mean')
+    
     loss = 0
     for i in range(len(student_preds)):
-        total_element += student_preds[i].numel()
         loss += criterion(student_preds[i], teacher_preds[i])
-    loss /= total_element
+    loss /= len(student_preds)
+    # print(f'------------{loss}------------')
     return loss
 
 def _do_train_v2(self: BaseTrainer, world_size=1):
@@ -65,6 +89,8 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
         # create imitation mask for knowledge distillation
         mask_id = self.args.kd_layer
         if hasattr(self, 'teacher'):
+            self.type_kd_loss = self.args.type_kd_loss # -----------------get type kd loss-----------------
+            self.teacher.train() 
             dump_image = torch.zeros((1, 3, self.args.imgsz, self.args.imgsz), device=self.device)
 
             _, features = self.model(dump_image, mask_id = mask_id)  # forward
@@ -75,9 +101,8 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
             for i in range(len(features)):
                 _, student_channel, student_out_size, _ = features[i].shape
                 _, teacher_channel, teacher_out_size, _ = teacher_feature[i].shape
-                stu_feature_adapts.append(nn.Sequential(nn.Conv2d(student_channel, teacher_channel, 3, 
-                                                        padding=1, stride=int(student_out_size / teacher_out_size)), 
-                                                        nn.ReLU()).to(self.device))
+                stu_feature_adapts.append(nn.Sequential(nn.Conv2d(student_channel, teacher_channel, 1,
+                                                        padding=0, stride=1)).to(self.device))
             
             
 
@@ -85,8 +110,6 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
             self.epoch = epoch
             self.run_callbacks('on_train_epoch_start')
             self.model.train()
-            if hasattr(self, 'teacher'):
-                self.teacher.eval() 
 
             if RANK != -1:
                 self.train_loader.sampler.set_epoch(epoch)
@@ -102,6 +125,16 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                 LOGGER.info(self.progress_string())
                 pbar = tqdm(enumerate(self.train_loader), total=nb, bar_format=TQDM_BAR_FORMAT)
             self.tloss = None
+            self.t_kdloss = 0 # mean of kd loss
+
+            #----------------mean feat-----------------
+            self.stu_mean = []
+            self.tea_mean = []
+            for id in mask_id:
+                self.stu_mean.append({id: 0})
+                self.tea_mean.append({id: 0})
+            #------------------------------------------------
+
             self.optimizer.zero_grad()
             for i, batch in pbar:
                 self.run_callbacks('on_train_batch_start')
@@ -133,21 +166,33 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                     if hasattr(self, 'teacher'):
                         stu_feature_maps = []
                         for i in range(len(features)):
+                            # print(f'-------------{stu_feature_adapts[i]}')
                             stu_feature_maps.append(stu_feature_adapts[i](features[i]))
-
-                    self.kd_loss = cal_kd_loss(stu_feature_maps, 
-                                            [f.detach() for f in teacher_features])
-                    # print(f'--------------{self.kd_loss}---------------')
-
+                        self.kd_loss = cal_kd_loss(stu_feature_maps, 
+                                                [f.detach() for f in teacher_features], type_kd_loss = self.type_kd_loss)
+                        
+                        #--------------------------------------------------------
+                        with torch.no_grad():
+                            for j in range(len(mask_id)):
+                                self.stu_mean[j][mask_id[j]] = (self.stu_mean[j][mask_id[j]] * i + torch.mean(stu_feature_maps[j])) / (i+1)
+                                self.tea_mean[j][mask_id[j]] = (self.tea_mean[j][mask_id[j]] * i + torch.mean(teacher_features[j])) / (i+1)
+                        
+                        #-----------------------------------------------------------
+                    
                     if RANK != -1:
                         self.loss *= world_size
                         if hasattr(self, 'teacher'):
                             self.kd_loss *= world_size
+
+                    #-------------------------------------------------------
+                    self.t_kdloss = (self.t_kdloss * i + self.kd_loss) / (i + 1)
+                    
                     self.tloss = (self.tloss * i + self.loss_items) / (i + 1) if self.tloss is not None \
                         else self.loss_items
 
                 # Backward
-                self.scaler.scale(self.loss + 0.3*self.kd_loss).backward()
+                self.alpha_kd = 2.0 # default 2.0
+                self.scaler.scale(self.loss + self.alpha_kd * self.kd_loss).backward()
 
                 # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
                 if ni - last_opt_step >= self.accumulate:
@@ -159,9 +204,11 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                 loss_len = self.tloss.shape[0] if len(self.tloss.size()) else 1
                 losses = self.tloss if loss_len > 1 else torch.unsqueeze(self.tloss, 0)
                 if RANK in (-1, 0):
+                    # + '\n' + '%15.5g' * (1 + len(mask_id)*2)
+                    # , self.kd_loss
                     pbar.set_description(
-                        ('%11s' * 2 + '%11.4g' * (2 + loss_len)) %
-                        (f'{epoch + 1}/{self.epochs}', mem, *losses, batch['cls'].shape[0], batch['img'].shape[-1]))
+                        ('%11s' * 2 + '%11.4g' * (2 + loss_len) + '%11.4g') % 
+                        (f'{epoch + 1}/{self.epochs}', mem, *losses, batch['cls'].shape[0], batch['img'].shape[-1], self.t_kdloss))
                     self.run_callbacks('on_batch_end')
                     if self.args.plots and ni in self.plot_idx:
                         self.plot_training_samples(batch, ni)
@@ -223,7 +270,6 @@ def trainer_train_v2(self: BaseTrainer):
         world_size = 1  # default to device 0
     else:  # i.e. device='cpu' or 'mps'
         world_size = 0
-
     # Run subprocess if DDP training, else train normally
     if world_size > 1 and 'LOCAL_RANK' not in os.environ:
         # Argument checks
@@ -241,6 +287,14 @@ def trainer_train_v2(self: BaseTrainer):
             ddp_cleanup(self, str(file))
     else:
         self._do_train_v2(world_size)
+
+
+def progress_string_v2(self: BaseTrainer):
+    """Returns a formatted string of training progress with epoch, GPU memory, loss, instances and size."""
+    return ('\n' + '%11s' *
+            (4 + len(self.loss_names))  + '%11s') % \
+            ('Epoch', 'GPU_mem', *self.loss_names, 'Instances', 'Size', 'KD_loss')
+
 
 def train_v2(self: YOLO,  **kwargs):
     """
@@ -265,7 +319,6 @@ def train_v2(self: YOLO,  **kwargs):
 
     self.task = overrides.get('task') or self.task
     self.trainer = TASK_MAP[self.task][1](overrides=overrides, _callbacks=self.callbacks)
-
     if not overrides.get('resume'):  # manually set model only if not resuming
         self.trainer.model = self.trainer.get_model(weights=self.model if self.ckpt else None, cfg=self.model.yaml)
         self.model = self.trainer.model
@@ -279,6 +332,7 @@ def train_v2(self: YOLO,  **kwargs):
 
     self.trainer.train_v2 = trainer_train_v2.__get__(self.trainer)
     self.trainer._do_train_v2 = _do_train_v2.__get__(self.trainer)
+    self.trainer.progress_string = progress_string_v2.__get__(self.trainer)
     self.trainer.train_v2()
     # Update model and cfg after training
     if RANK in (-1, 0):
@@ -286,11 +340,12 @@ def train_v2(self: YOLO,  **kwargs):
         self.overrides = self.model.args
         self.metrics = getattr(self.trainer.validator, 'metrics', None)
 
-
 def main(args):
 
     args = get_cfg(DEFAULT_CFG, vars(args))
     model = YOLO(args.model)
+    model.add_callback('on_batch_end', on_batch_end2)
+    model.add_callback('on_fit_epoch_end', on_fit_epoch_end2)
     model.train_v2 = train_v2.__get__(model)
     model.train_v2(**vars(args))
 
@@ -301,18 +356,18 @@ if __name__ == "__main__":
     parser.add_argument('--model', default='yolov8m.yaml', help='Pretrained pruning target model file')
     parser.add_argument('--teacher', help='teacher model')
     parser.add_argument('--kd_layer', nargs='*', type=int, default=[15, 18, 21], help="id of layers for KD")
+    parser.add_argument('--type_kd_loss', default='dssim', help='type of kd loss for feature maps')
 
     parser.add_argument('--batch', default=4, type=int, help='batch_size')
     parser.add_argument('--data', default='coco128.yaml', help='dataset')
     parser.add_argument('--device', default=0, help='cpu or gpu')
-    parser.add_argument('--project', default='KD', help='project name')
+    parser.add_argument('--project', default='KD_feature', help='project name')
     parser.add_argument('--epochs', type=int, default=10, help='epochs')
     parser.add_argument('--imgsz', type=int, default=640, help='Size of input images')
     parser.add_argument('--workers', type=int, default=4, help="number of worker threads for data loading (per RANK if DDP)")
     parser.add_argument('--resume', type=bool, default=False, help="continue training (if KD, must provide teacher)")
     
     args = parser.parse_args()
-
 
     main(args)
     

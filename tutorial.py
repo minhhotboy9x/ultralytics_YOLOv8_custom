@@ -5,9 +5,10 @@ from ultralytics.yolo.v8.detect.train import DetectionTrainer
 from ultralytics.yolo.v8.detect.val import DetectionValidator
 from ultralytics.yolo.utils import DEFAULT_CFG, ROOT, SETTINGS
 from ultralytics.yolo.cfg import get_cfg
-
+from ultralytics import YOLO
 CFG = get_cfg(DEFAULT_CFG)
 
 if __name__ == '__main__':
-    x = torch.tensor([0.001, 0.001])
-    print(x+0.001)
+    model = YOLO('yolov8s.pt')
+    model.val('coco.yaml')
+

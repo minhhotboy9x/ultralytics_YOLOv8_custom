@@ -8,25 +8,17 @@ ultralytics_dir = os.path.abspath("./")
 # Thêm đường dẫn của folder cha vào sys.path
 sys.path.append(ultralytics_dir)
 
-from copy import deepcopy
-from datetime import datetime
-from pathlib import Path
-from typing import List, Union
 import numpy as np
 import torch
 import torch.nn as nn
-from matplotlib import pyplot as plt
 from ultralytics import YOLO, __version__
-from ultralytics.nn.modules import Detect, C2f, Conv, Bottleneck
 from ultralytics.nn.tasks import attempt_load_one_weight
 from ultralytics.yolo.engine.model import TASK_MAP
 from ultralytics.yolo.engine.trainer import BaseTrainer
 from ultralytics.yolo.utils import (yaml_load, LOGGER, RANK, DEFAULT_CFG_DICT, TQDM_BAR_FORMAT, 
                             DEFAULT_CFG_KEYS, DEFAULT_CFG, callbacks, clean_url, colorstr, emojis, yaml_save)
 from ultralytics.yolo.utils.checks import check_yaml
-from ultralytics.yolo.utils.torch_utils import initialize_weights, de_parallel
 from ultralytics.yolo.utils.dist import ddp_cleanup, generate_ddp_command
-from ultralytics.yolo.v8.detect.train import DetectionModel
 from ultralytics.yolo.cfg import get_cfg
 from tqdm import tqdm
 
@@ -42,7 +34,7 @@ class KLDLoss(nn.Module):
         return loss.sum(dim = num_dims-1).mean()
 
     
-def cal_kd_loss(self: BaseTrainer, student_preds, teacher_preds, T=1.0):
+def cal_kd_loss(self: BaseTrainer, student_preds, teacher_preds, T=3.0):
     m = self.model.model[-1]
     nc = m.nc  # number of classes
     no = m.no  # number of outputs per anchor
@@ -179,7 +171,7 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                     else self.loss_items
 
             # Backward
-            self.scaler.scale(0.8 + self.loss + 0.2 * self.kd_loss).backward()
+            self.scaler.scale(self.loss + 0.2 * self.kd_loss).backward()
 
             # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
             if ni - last_opt_step >= self.accumulate:

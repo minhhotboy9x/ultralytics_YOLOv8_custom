@@ -81,8 +81,8 @@ class BaseTrainer:
         """
         self.args = get_cfg(cfg, overrides)
         self.device = select_device(self.args.device, self.args.batch)
-        # print(f'--------------------{self.args.data}-----------------------')
         self.check_resume()
+        
         self.validator = None
         self.model = None
         self.metrics = None
@@ -147,7 +147,7 @@ class BaseTrainer:
         self.callbacks = _callbacks or callbacks.get_default_callbacks()
         if RANK in (-1, 0):
             callbacks.add_integration_callbacks(self)
-
+        
 
     def add_callback(self, event: str, callback):
         """
