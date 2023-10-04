@@ -314,7 +314,7 @@ def prune(args):
 
     # do validation before pruning model
     pruning_cfg['name'] = os.path.join(prefix_folder, f"baseline_val")
-    pruning_cfg['batch'] = 1
+    # pruning_cfg['batch'] = 1
     validation_model = deepcopy(model) #YOLO object
     metric = validation_model.val(**pruning_cfg)
     init_map = metric.box.map
@@ -369,7 +369,7 @@ def prune(args):
 
         # pre fine-tuning validation
         pruning_cfg['name'] = os.path.join(prefix_folder, f"step_{i}_pre_val")
-        pruning_cfg['batch'] = 1
+        # pruning_cfg['batch'] = 1
         validation_model.model = deepcopy(model.model)
         metric = validation_model.val(**pruning_cfg)
         pruned_map = metric.box.map
@@ -387,7 +387,7 @@ def prune(args):
 
         # post fine-tuning validation
         pruning_cfg['name'] = os.path.join(prefix_folder, f"step_{i}_post_val")
-        pruning_cfg['batch'] = 1
+        # pruning_cfg['batch'] = 1
         validation_model = YOLO(model.trainer.best)
         metric = validation_model.val(**pruning_cfg)
         current_map = metric.box.map

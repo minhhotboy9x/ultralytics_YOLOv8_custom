@@ -11,6 +11,7 @@ sys.path.append(ultralytics_dir)
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from ultralytics import YOLO, __version__
 from ultralytics.nn.tasks import attempt_load_one_weight
 from ultralytics.yolo.engine.model import TASK_MAP
@@ -24,48 +25,192 @@ from ultralytics.yolo.cfg import get_cfg
 from tqdm import tqdm
 from ultralytics.yolo.utils.callbacks.tensorboard import on_batch_end2, on_fit_epoch_end2
 
-class MinMaxRescalingLayer(nn.Module):
+class FocalLoss(nn.Module):
     def __init__(self):
-        super(MinMaxRescalingLayer, self).__init__()
-
-    def forward(self, x, y):
-        min_val = torch.min(x.min(-1)[0].min(-1)[0], y.min(-1)[0].min(-1)[0])
-        max_val = torch.max(x.max(-1)[0].max(-1)[0], y.max(-1)[0].min(-1)[0])
+        super(FocalLoss, self).__init__()
+        self.alpha_ = 1.6e-3
+        self.beta_ = 8e-4
+        self.gamma_ = 8e-3
         
-        # Kiểm tra và xử lý trường hợp mẫu số bằng 0
-        denominator_zero_mask = (max_val - min_val) == 0
-        max_val = torch.where(denominator_zero_mask, max_val + 1e-6, max_val)
+
+    def binary_scale_masks(self, batch, teacher_features):
+        Ms = [torch.zeros(i.shape).to(i.device) for i in teacher_features]
+        Ss = [torch.ones(i.shape).to(i.device) for i in teacher_features]
+        targets = torch.cat((batch['batch_idx'].view(-1, 1), batch['cls'].view(-1, 1), batch['bboxes']), 1)
+
+        '''
+        import matplotlib.pyplot as plt
+        imgs = batch['img'].clone()
+        imgs = [row for row in imgs]
         
-        rescaled_x = (x - min_val[:,:,None,None]) / (max_val[:,:,None,None] - min_val[:,:,None,None])
-        rescaled_y = (y - min_val[:,:,None,None]) / (max_val[:,:,None,None] - min_val[:,:,None,None])
-        return rescaled_x, rescaled_y
+        for i in range(len(imgs)):
+            imgs[i] = imgs[i].permute(1, 2, 0).cpu().numpy()
+        '''
 
-class DSSIM(nn.Module):
-    def __init__(self, device = 'cpu'):
-        super(DSSIM, self).__init__()
-        self.device = device
-        self.scaler = MinMaxRescalingLayer()
+        for target in targets:
+            id = int(target[0])
+            x_center, y_center, width, height = [int(i*640) for i in target[2:]]
+            color = (0, 255, 0) 
+            thickness = 2 
 
-    def forward(self, y_pred, y_true): 
-        y_pred_scaled, y_true_scaled = self.scaler(y_pred, y_true)
-        loss = ssim(y_pred_scaled, y_true_scaled, data_range=1.0)
-        loss = (1-loss)/2
-        # print(f'------------{type(loss)}--------------')
+            x_left, y_top = (x_center - width//2, y_center - height//2)
+            x_right, y_down = (x_center + width//2, y_center + height//2)
+
+            '''
+            imgs[id][y_top:y_top+thickness, x_left:x_right+1, :] = color  # Vẽ top edge
+            imgs[id][y_top:y_down+1, x_left:x_left+thickness, :] = color  # Vẽ left edge
+            imgs[id][y_down-thickness:y_down, x_left:x_right+1, :] = color  # Vẽ bottom edge
+            imgs[id][y_top:y_down+1, x_right-thickness:x_right, :] = color  # Vẽ left edge
+            '''
+
+            for i in range(len(Ms)):
+                x_center, y_center, width, height = [int(id*Ms[i].shape[2]) for id in target[2:]]
+                x_left, y_top = (x_center - width//2, y_center - height//2)
+                x_right, y_down = (x_center + width//2, y_center + height//2)
+                width += x_right - x_left + 1
+                height += y_down - y_top + 1
+                Ms[i][id, :, y_top:y_down+1, x_left:x_right+1] = 1.0
+                # Ss[i][id, :, y_top:y_down+1, x_left:x_right+1] = \
+                #     torch.min(Ss[i][id, :, y_top:y_down+1, x_left:x_right+1], torch.tensor(1/(width*height))[None, None, None, None])
+                
+        for i in range(len(Ss)):
+            Ss[i] = Ss[i]/(1 - Ms[i]).sum(dim=(2, 3))[:, :, None, None]
+        
+        for target in targets:
+            id = int(target[0])
+            for i in range(len(Ss)):
+                x_center, y_center, width, height = [int(id*Ms[i].shape[2]) for id in target[2:]]
+                x_left, y_top = (x_center - width//2, y_center - height//2)
+                x_right, y_down = (x_center + width//2, y_center + height//2)
+                width += x_right - x_left + 1
+                height += y_down - y_top + 1
+                Ss[i][id, :, y_top:y_down+1, x_left:x_right+1] = 1.0
+                Ss[i][id, :, y_top:y_down+1, x_left:x_right+1] = \
+                    torch.min(Ss[i][id, :, y_top:y_down+1, x_left:x_right+1], 
+                              torch.tensor(1/(width*height)).to(teacher_features[i].device)[None, None, None, None])
+                
+        '''
+        for i in range(len(imgs)):
+            plt.subplot(3, 3, 1)
+            plt.imshow(Ms[0][i, 0, :, :].cpu().numpy(), cmap='gray')
+            plt.subplot(3, 3, 2)  
+            plt.imshow(Ms[1][i, 1, :, :].cpu().numpy(), cmap='gray')
+            plt.subplot(3, 3, 3)  
+            plt.imshow(Ms[2][i, 2, :, :].cpu().numpy(), cmap='gray')
+            plt.subplot(3, 3, 4)  
+            plt.imshow(imgs[i])
+            
+            plt.subplot(3, 3, 5)
+            plt.imshow(Ss[0][i, 0, :, :].cpu().numpy(), cmap='hot')
+            
+            torch.set_printoptions(threshold=10000)
+            plt.text(50, 125, Ss[2][i, 0, :, :].cpu().numpy(), color='red', fontsize=6, ha='center', va='center')
+
+            plt.subplot(3, 3, 6)  
+            plt.imshow(Ss[1][i, 1, :, :].cpu().numpy(), cmap='hot')
+
+            plt.subplot(3, 3, 7)  
+            plt.imshow(Ss[2][i, 2, :, :].cpu().numpy(), cmap='hot')
+
+            plt.savefig('image.png')
+            plt.show()
+            plt.close()
+        '''
+        return Ms, Ss
+
+    def attention_masks(self, features, T=1):
+        Ass = []
+        Acs = [] 
+        for feature in features:
+            b, c, h, w = feature.shape
+            Gs = 1/c * feature.abs().sum(dim=1) # b, h, w
+            Gc = 1/(h*w) * feature.abs().sum(dim=(2, 3))[:, :, None, None].repeat(1, 1, h, w) # b, c, h, w
+
+            m_1d = nn.Softmax(dim=1)
+            m_2d = nn.Softmax2d()
+
+            As = h*w * m_1d((Gs/T).view(b, -1)).view(b, 1, h, w).repeat(1, c, 1, 1)
+            Ac = c * m_2d(Gc/T)   
+
+            Ass.append(As)
+            Acs.append(Ac)
+        
+        return Ass, Acs
+
+    def forward(self, y_pred, y_true, batch): 
+        Ms, Ss = self.binary_scale_masks(batch, y_true)
+        A_tea_ss, A_tea_cs = self.attention_masks(y_true)
+        A_stu_ss, A_stu_cs = self.attention_masks(y_pred)
+        l1 = nn.L1Loss()
+        L_at = 0
+        L_fea = 0
+        for i in range(len(A_tea_cs)):
+            L_at += self.gamma_*(l1(A_stu_ss[i], A_tea_ss[i]) + l1(A_stu_cs[i], A_tea_cs[i]))
+        
+        L_at /= len(A_stu_cs)
+
+        for i in range(len(A_tea_cs)):
+            b, c, h, w = y_true[i].shape 
+            # print(f'--{A_tea_ss[i].device}----{A_tea_cs[i].device}----{Ms[i].device}----{Ss[i].device}----{y_true[i].device}----{y_pred[i].device}-')
+            L_fea += self.alpha_ * (Ms[i] * Ss[i] * A_tea_ss[i] * A_tea_cs[i] * torch.pow(y_true[i]-y_pred[i], 2)).sum() / b \
+                + self.beta_ * ((1-Ms[i]) * Ss[i] * A_tea_ss[i] * A_tea_cs[i] * torch.pow(y_true[i]-y_pred[i], 2)).sum() / b
+
+        L_fea /= len(A_stu_cs)
+        # print(f'---------------{L_fea}--{L_at}------------------')
+        return L_fea + L_at
+
+class GlobalLoss(nn.Module):
+    def __init__(self):
+        super(GlobalLoss, self).__init__()
+        self.lambda_ = 8e-6
+        
+    def forward(self, y_pred, y_true, gc_blocks):
+        mse = nn.MSELoss()
+        loss = 0
+        for i in range(len(y_pred)):
+            r_pred = gc_blocks[i](y_pred[i])
+            r_true = gc_blocks[i](y_true[i])
+            loss += self.lambda_ * mse(r_pred, r_true)
         return loss
 
+class GcBlock(nn.Module):
+    def __init__(self, c = 3):
+        super(GcBlock, self).__init__()
+        # Định nghĩa các lớp convolution và pooling
+        self.Wk = nn.Conv2d(in_channels=c, out_channels=1, kernel_size=1, stride=1, padding=0)
+        self.softmax2d = nn.Softmax2d()
+        self.Wv1 = nn.Conv2d(in_channels=c, out_channels=c//2, kernel_size=1, stride=1)
+        self.layer_norm = nn.LayerNorm([c//2, 1, 1]) 
+        self.relu = nn.ReLU(inplace=True)
+        self.Wv2 = nn.Conv2d(in_channels=c//2, out_channels=c, kernel_size=1, stride=1)
 
-def cal_kd_loss(student_preds, teacher_preds, type_kd_loss='DSSIM'):
-    if type_kd_loss.upper() == 'DSSIM':
-        criterion = DSSIM(device = student_preds[0].device)
-    else: # bất kì giá trị nào khác đều sử dụng mse loss
-        criterion = nn.MSELoss(reduction='mean')
+    def forward(self, x):
+        b, c, h, w = x.size()
+        x1 = self.Wk(x) # b, 1, H, W
+        x1 = x1.view(b, 1, h*w) # b, 1, w*h
+        x1 = x1.unsqueeze(1).permute(0, 3, 1, 2) # b, h*w, 1, 1
+        x1 = self.softmax2d(x1)
+        x1 = x1.view(b, h*w, 1) # b, h*w, 1
+        x_ = x.view(b, c, h*w) # b, c, h*w
+        # print(x_.shape, x1.shape)
+        y1 = torch.matmul(x_, x1).view(b, c, 1, 1) #b, c, 1, 1
     
-    loss = 0
-    for i in range(len(student_preds)):
-        loss += criterion(student_preds[i], teacher_preds[i])
-    loss /= len(student_preds)
-    # print(f'------------{loss}------------')
-    return loss
+        x2 = self.Wv1(y1) # b, c//2, 1, 1
+        # print(f'---------------{x2.shape}--{y1.shape}-------{x1.shape}----------')
+        x2 = self.layer_norm(x2) # b, c//2, 1, 1 
+        x2 = self.relu(x2) # b, c//2, 1, 1
+        x2 = self.Wv2(x2) # b, c, 1, 1
+
+        output = x + x2 # b, c, w, h
+        return output
+
+def cal_kd_loss(student_preds, teacher_preds, batch, gc_blocks):
+    focal_cri = FocalLoss()
+    global_cri = GlobalLoss()
+    l_focal = focal_cri(student_preds, teacher_preds, batch)
+    l_global = global_cri(student_preds, teacher_preds, gc_blocks)
+    # print(f'-----------{l_global}-----------')
+    return l_focal + l_global
 
 def _do_train_v2(self: BaseTrainer, world_size=1):
         """Train completed, evaluate and plot if specified by arguments."""
@@ -92,7 +237,7 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
         # create imitation mask for knowledge distillation
         mask_id = self.args.kd_layer
         if hasattr(self, 'teacher'):
-            self.type_kd_loss = self.args.type_kd_loss # -----------------get type kd loss-----------------
+            self.type_kd_loss = 'fgd_loss' # -----------------get type kd loss-----------------
             self.teacher.train() 
             dump_image = torch.zeros((1, 3, self.args.imgsz, self.args.imgsz), device=self.device)
 
@@ -100,13 +245,14 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
             _, teacher_feature= self.teacher(dump_image, mask_id = mask_id) 
             
             stu_feature_adapts = [] # contain imitation
+            gc_blocks = [] # gc_block for global distill
 
             for i in range(len(features)):
                 _, student_channel, student_out_size, _ = features[i].shape
                 _, teacher_channel, teacher_out_size, _ = teacher_feature[i].shape
                 stu_feature_adapts.append(nn.Sequential(nn.Conv2d(student_channel, teacher_channel, 1,
                                                         padding=0, stride=1)).to(self.device))
-            
+                gc_blocks.append(GcBlock(c=teacher_channel).to(self.device))
             
 
         for epoch in range(self.start_epoch, self.epochs):
@@ -171,8 +317,12 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                         for i in range(len(features)):
                             # print(f'-------------{stu_feature_adapts[i]}')
                             stu_feature_maps.append(stu_feature_adapts[i](features[i]))
+
+                        fgd_loss = FocalLoss()
+                        fgd_loss.forward(stu_feature_maps, [f.detach() for f in teacher_features], batch) # debug
+
                         self.kd_loss = cal_kd_loss(stu_feature_maps, 
-                                                [f.detach() for f in teacher_features], type_kd_loss = self.type_kd_loss)
+                                                [f.detach() for f in teacher_features], batch, gc_blocks)
                         
                         #--------------------------------------------------------
                         with torch.no_grad():
@@ -355,7 +505,7 @@ if __name__ == "__main__":
     parser.add_argument('--model', default='yolov8m.yaml', help='Pretrained pruning target model file')
     parser.add_argument('--teacher', help='teacher model')
     parser.add_argument('--kd_layer', nargs='*', type=int, default=[15, 18, 21], help="id of layers for KD")
-    parser.add_argument('--type_kd_loss', default='dssim', help='type of kd loss for feature maps')
+    # parser.add_argument('--type_kd_loss', default='mse', help='type of kd loss for feature maps')
 
     parser.add_argument('--batch', default=4, type=int, help='batch_size')
     parser.add_argument('--data', default='coco128.yaml', help='dataset')

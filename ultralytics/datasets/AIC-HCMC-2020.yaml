@@ -1,0 +1,12 @@
+
+path: ../datasets/AIC-HCMC-2020 # dataset root dir
+train: images/train  # train images (relative to 'path') 118287 images
+val: images/val  # val images (relative to 'path') 5000 images
+test: images/val  # 20288 of 40670 images, submit to https://competitions.codalab.org/competitions/20794
+
+# Classes
+names:
+  0: two-wheels
+  1: four-wheels
+  2: bus
+  3: truck

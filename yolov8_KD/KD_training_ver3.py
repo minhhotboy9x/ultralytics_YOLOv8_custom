@@ -22,7 +22,7 @@ from ultralytics.yolo.utils.dist import ddp_cleanup, generate_ddp_command
 from pytorch_msssim import ssim
 from ultralytics.yolo.cfg import get_cfg
 from tqdm import tqdm
-from ultralytics.yolo.utils.callbacks.tensorboard import on_batch_end2, on_fit_epoch_end2
+from ultralytics.yolo.utils.callbacks.tensorboard import on_batch_end2, on_batch_end3, on_fit_epoch_end2
 
 class MinMaxRescalingLayer(nn.Module):
     def __init__(self):
@@ -50,9 +50,19 @@ class DSSIM(nn.Module):
         y_pred_scaled, y_true_scaled = self.scaler(y_pred, y_true)
         loss = ssim(y_pred_scaled, y_true_scaled, data_range=1.0)
         loss = (1-loss)/2
-        # print(f'------------{type(loss)}--------------')
+        # print(f'------------{loss}--------------')
         return loss
 
+class KLDLoss(nn.Module):
+    def __init__(self):
+        super(KLDLoss, self).__init__()
+
+    def forward(self, y_pred, y_true):
+        # epsilon = 1e-7
+        loss = - torch.where(y_true != 0, y_true * (y_pred / y_true).log(), torch.tensor(0.0))
+        num_dims = y_pred.dim()
+        # keep_dims = tuple(range(1, num_dims))
+        return loss.sum(dim = num_dims-1).mean()
 
 def cal_kd_loss(student_preds, teacher_preds, type_kd_loss='DSSIM'):
     if type_kd_loss.upper() == 'DSSIM':
@@ -66,6 +76,50 @@ def cal_kd_loss(student_preds, teacher_preds, type_kd_loss='DSSIM'):
     loss /= len(student_preds)
     # print(f'------------{loss}------------')
     return loss
+
+def cal_kd_loss2(self: BaseTrainer, student_preds, teacher_preds, T=3.0):
+    m = self.model.model[-1]
+    nc = m.nc  # number of classes
+    no = m.no  # number of outputs per anchor
+    reg_max = m.reg_max
+
+    stu_pred_distri, stu_pred_scores = torch.cat([xi.view(student_preds[0].shape[0], no, -1) for xi in student_preds], 2).split(
+            (reg_max * 4, nc), 1)
+
+    stu_pred_scores = stu_pred_scores.permute(0, 2, 1).contiguous() # batch, anchors, channels
+    stu_pred_distri = stu_pred_distri.permute(0, 2, 1).contiguous() # batch, anchors, channels
+    b, a, c = stu_pred_distri.shape  # batch, anchors, channels
+
+    tea_pred_distri, tea_pred_scores = torch.cat([xi.view(teacher_preds[0].shape[0], no, -1) for xi in teacher_preds], 2).split(
+            (reg_max * 4, nc), 1)
+
+    tea_pred_scores = tea_pred_scores.permute(0, 2, 1).contiguous() # batch, anchors, channels
+    tea_pred_distri = tea_pred_distri.permute(0, 2, 1).contiguous() # batch, anchors, channels
+    #-------------------------------KD loss----------------------------------------
+    kl_loss = KLDLoss()
+    bce_loss = nn.BCEWithLogitsLoss(reduction='mean')
+
+    stu_pred_scores = (stu_pred_scores/T)
+    stu_pred_distri = (stu_pred_distri/T).view(b, a, 4, c // 4).softmax(3)
+
+    tea_pred_scores = (tea_pred_scores/T).sigmoid()
+    tea_pred_distri = (tea_pred_distri/T).view(b, a, 4, c // 4).softmax(3)
+
+    cl_loss = bce_loss(stu_pred_scores, tea_pred_scores)
+    box_loss = kl_loss(stu_pred_distri, tea_pred_distri)
+
+    # print(f'----------------size----------- {tea_pred_scores.shape} {tea_pred_distri.shape}')  # torch.Size([32, 8400, 80]) torch.Size([32, 8400, 4, 16])
+
+    # print(f'\n----------------kd_loss----------- {cl_loss} {box_loss}')
+
+    # print(f'\n---------------{stu_pred_scores[13, 4]}, \n { tea_pred_scores[13, 4]}')
+    # for i in range(8400):
+    #     tmp = kl_loss(stu_pred_scores[13, i], tea_pred_scores[13, i])
+    #     if torch.isnan(tmp):
+    #         print(f'\n----------------kd_loss----------- {i}: {kl_loss(stu_pred_scores[13, i], tea_pred_scores[13, i])} ')
+    #         break
+
+    return 0.8*box_loss + 0.2*cl_loss
 
 def _do_train_v2(self: BaseTrainer, world_size=1):
         """Train completed, evaluate and plot if specified by arguments."""
@@ -129,6 +183,7 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                 pbar = tqdm(enumerate(self.train_loader), total=nb, bar_format=TQDM_BAR_FORMAT)
             self.tloss = None
             self.t_kdloss = 0 # mean of kd loss
+            self.t_kdloss2 = 0 # mean of kd loss
 
             #----------------mean feat-----------------
             self.stu_mean = []
@@ -156,11 +211,13 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                 # Forward
                 with torch.cuda.amp.autocast(self.amp):
                     batch = self.preprocess_batch(batch)
-                    self.kd_loss = 0.0 # make a kd_loss
+                    self.kd_loss = 0.0 # make a kd_loss feat
+                    self.kd_loss2 = 0.0 # make a kd_loss output
 
                     if hasattr(self, 'teacher'):
                         preds, features =  self.model(batch['img'], mask_id = mask_id)
                         teacher_preds, teacher_features =  self.teacher(batch['img'], mask_id = mask_id)
+                        self.kd_loss2 = cal_kd_loss2(self, preds, [out.detach() for out in teacher_preds])
                     else:
                         preds = self.model(batch['img']) # predict
 
@@ -186,16 +243,20 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                         self.loss *= world_size
                         if hasattr(self, 'teacher'):
                             self.kd_loss *= world_size
+                            self.kd_loss2 *= world_size
 
                     #-------------------------------------------------------
                     self.t_kdloss = (self.t_kdloss * i + self.kd_loss) / (i + 1)
+                    self.t_kdloss2 = (self.t_kdloss2 * i + self.kd_loss2) / (i + 1)
                     
                     self.tloss = (self.tloss * i + self.loss_items) / (i + 1) if self.tloss is not None \
                         else self.loss_items
 
                 # Backward
                 self.alpha_kd = 2.0 # default 2.0
-                self.scaler.scale(self.loss + self.alpha_kd * self.kd_loss).backward()
+                self.beta_kd = 2.0 # default 0.2
+                
+                self.scaler.scale(self.loss + self.alpha_kd*self.kd_loss + self.beta_kd*self.kd_loss2).backward()
 
                 # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
                 if ni - last_opt_step >= self.accumulate:
@@ -210,8 +271,8 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                     # + '\n' + '%15.5g' * (1 + len(mask_id)*2)
                     # , self.kd_loss
                     pbar.set_description(
-                        ('%11s' * 2 + '%11.4g' * (2 + loss_len) + '%11.4g') % 
-                        (f'{epoch + 1}/{self.epochs}', mem, *losses, batch['cls'].shape[0], batch['img'].shape[-1], self.t_kdloss))
+                        ('%11s' * 2 + '%11.4g' * (2 + loss_len) + '%11.4g' * 2) % 
+                        (f'{epoch + 1}/{self.epochs}', mem, *losses, batch['cls'].shape[0], batch['img'].shape[-1], self.t_kdloss, self.t_kdloss2))
                     self.run_callbacks('on_batch_end')
                     if self.args.plots and ni in self.plot_idx:
                         self.plot_training_samples(batch, ni)
@@ -291,16 +352,19 @@ def trainer_train_v2(self: BaseTrainer):
     else:
         self._do_train_v2(world_size)
 
+
 def progress_string_v2(self: BaseTrainer):
     """Returns a formatted string of training progress with epoch, GPU memory, loss, instances and size."""
     return ('\n' + '%11s' *
-            (4 + len(self.loss_names))  + '%11s') % \
-            ('Epoch', 'GPU_mem', *self.loss_names, 'Instances', 'Size', 'KD_loss')
+            (4 + len(self.loss_names))  + '%11s'*2) % \
+            ('Epoch', 'GPU_mem', *self.loss_names, 'Instances', 'Size', 'KD_loss', 'KD_loss2')
+
 
 def train_v2(self: YOLO,  **kwargs):
     """
     Disabled loading new model when pruning flag is set. originated from ultralytics/yolo/engine/model.py
     """
+
     self._check_is_pytorch_model()
     if self.session:  # Ultralytics HUB session
         if any(kwargs):
@@ -344,6 +408,7 @@ def main(args):
     args = get_cfg(DEFAULT_CFG, vars(args))
     model = YOLO(args.model)
     model.add_callback('on_batch_end', on_batch_end2)
+    model.add_callback('on_batch_end', on_batch_end3)
     model.add_callback('on_fit_epoch_end', on_fit_epoch_end2)
     model.train_v2 = train_v2.__get__(model)
     model.train_v2(**vars(args))
@@ -360,7 +425,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch', default=4, type=int, help='batch_size')
     parser.add_argument('--data', default='coco128.yaml', help='dataset')
     parser.add_argument('--device', default=0, help='cpu or gpu')
-    parser.add_argument('--project', default='KD_feature', help='project name')
+    parser.add_argument('--project', default='KD_feature_out', help='project name')
     parser.add_argument('--epochs', type=int, default=10, help='epochs')
     parser.add_argument('--imgsz', type=int, default=640, help='Size of input images')
     parser.add_argument('--workers', type=int, default=4, help="number of worker threads for data loading (per RANK if DDP)")

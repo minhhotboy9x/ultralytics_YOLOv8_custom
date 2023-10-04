@@ -164,6 +164,7 @@ class Loss:
         return dist2bbox(pred_dist, anchor_points, xywh=False)
 
     def __call__(self, preds, batch):
+        # self.debug_bboxes(batch)
         """Calculate the sum of the loss for box, cls and dfl multiplied by batch size."""
         loss = torch.zeros(3, device=self.device)  # box, cls, dfl
         feats = preds[1] if isinstance(preds, tuple) else preds
@@ -181,10 +182,10 @@ class Loss:
 
         # targets
         targets = torch.cat((batch['batch_idx'].view(-1, 1), batch['cls'].view(-1, 1), batch['bboxes']), 1)
+        
         targets = self.preprocess(targets.to(self.device), batch_size, scale_tensor=imgsz[[1, 0, 1, 0]])
         gt_labels, gt_bboxes = targets.split((1, 4), 2)  # cls, xyxy
         mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0)
-
         # pboxes
         pred_bboxes = self.bbox_decode(anchor_points, pred_distri)  # xyxy, (b, h*w, 4)
 
@@ -209,6 +210,52 @@ class Loss:
         loss[2] *= self.hyp.dfl  # dfl gain
         
         return loss.sum() * batch_size, loss.detach()  # loss(box, cls, dfl)
+
+    def debug_bboxes(self, batch):
+        import matplotlib.pyplot as plt
+        targets = torch.cat((batch['batch_idx'].view(-1, 1), batch['cls'].view(-1, 1), batch['bboxes']), 1)
+        # print(targets[:5])
+        # print(batch['batch_idx'].view(-1, 1)[:5])
+        # print(batch['cls'].view(-1, 1)[:5])
+        # print(targets[:])
+        imgs = batch['img'].clone()
+        imgs = [row for row in imgs]
+        masks = [torch.zeros(3, 640, 640) for row in imgs] 
+        for i in range(len(imgs)):
+            imgs[i] = imgs[i].permute(1, 2, 0) .cpu().numpy()
+            masks[i] = masks[i].permute(1, 2, 0) .cpu().numpy()
+        
+
+        for target in targets:
+            id = int(target[0])
+            x_center, y_center, width, height = [int(i*640) for i in target[2:]]
+            print('--------debug activated--------------------')
+            # print(x_center, y_center, width, height)
+
+            color = (0, 255, 0) 
+            thickness = 2 
+
+            x_left, y_top = (x_center - width//2, y_center - height//2)
+            x_right, y_down = (x_center + width//2, y_center + height//2)
+            
+            imgs[id][y_top:y_top+thickness, x_left:x_right+1, :] = color  # Vẽ top edge
+            imgs[id][y_top:y_down+1, x_left:x_left+thickness, :] = color  # Vẽ left edge
+            imgs[id][y_down-thickness:y_down, x_left:x_right+1, :] = color  # Vẽ bottom edge
+            imgs[id][y_top:y_down+1, x_right-thickness:x_right, :] = color  # Vẽ left edge
+
+            masks[id][y_top:y_down+1, x_left:x_right+1, :] = color  
+           
+
+        for i in range(len(imgs)):
+            plt.subplot(1, 2, 1)
+            plt.imshow(imgs[i])
+            plt.subplot(1, 2, 2)  
+            plt.imshow(masks[i])
+            plt.axis('off')  # Tắt trục
+            plt.show()
+        # print(f'-------------{batch["batch_idx"][0]}-------------')
+        # print(f'-------------{batch["cls"].shape}-------------')
+        # print(f'-------------{batch["bboxes"][0]}-------------')
 
 
 def train(cfg=DEFAULT_CFG, use_python=False):

@@ -5,22 +5,19 @@ from .metapruner import MetaPruner
 from .scheduler import linear_scheduler
 from .. import function
 from ... import ops
-from ..importance import MagnitudeImportance
 
-class BNScalePruner(MetaPruner):
-    """Learning Efficient Convolutional Networks through Network Slimming, 
-    https://arxiv.org/abs/1708.06519
+class GrowingRegPruner(MetaPruner):
+    """ pruning with growing regularization
+    https://arxiv.org/abs/2012.09243
     """
-    
     def __init__(
         self,
-  
         # Basic
         model: nn.Module, # a simple pytorch model
         example_inputs: torch.Tensor, # a dummy input for graph tracing. Should be on the same 
         importance: typing.Callable, # tp.importance.Importance for group importance estimation
         reg=1e-5, # regularization coefficient
-        group_lasso=False, # use group lasso
+        delta_reg=1e-5, # increment of regularization coefficient
         global_pruning: bool = False, # https://pytorch.org/tutorials/intermediate/pruning_tutorial.html#global-pruning.
         ch_sparsity: float = 0.5,  # channel/dim sparsity, also known as pruning ratio
         ch_sparsity_dict: typing.Dict[nn.Module, float] = None, # layer-specific sparsity, will cover ch_sparsity if specified
@@ -41,9 +38,8 @@ class BNScalePruner(MetaPruner):
 
         # deprecated
         channel_groups: typing.Dict[nn.Module, int] = dict(), # channel groups for layers
-
     ):
-        super(BNScalePruner, self).__init__(
+        super(GrowingRegPruner, self).__init__(
             model=model,
             example_inputs=example_inputs,
             importance=importance,
@@ -66,37 +62,74 @@ class BNScalePruner(MetaPruner):
             
             channel_groups=channel_groups,
         )
-        self.reg = reg
+        self.base_reg = reg
         self._groups = list(self.DG.get_all_groups(root_module_types=self.root_module_types, ignored_layers=self.ignored_layers))
-        self.group_lasso = group_lasso
-        if self.group_lasso:
-            self._l2_imp = MagnitudeImportance(p=2, group_reduction='mean', normalizer=None, target_types=[nn.modules.batchnorm._BatchNorm])
-    
+
+        group_reg = {}
+        for group in self._groups:
+            group_reg[group] = torch.ones(len(group[0].idxs)) * self.base_reg
+        self.group_reg = group_reg
+        self.delta_reg = delta_reg
+
+    def update_reg(self):
+        for group in self._groups:
+            group_l2norm_sq = self.estimate_importance(group)
+            if group_l2norm_sq is None:
+                continue
+            reg = self.group_reg[group]
+            standarized_imp = (group_l2norm_sq.max() - group_l2norm_sq) / \
+                (group_l2norm_sq.max() - group_l2norm_sq.min() + 1e-8)  # => [0, 1]
+            reg = reg + self.delta_reg * standarized_imp.to(reg.device)
+            self.group_reg[group] = reg
+
     def step(self, interactive=False): 
-        super(BNScalePruner, self).step(interactive=interactive)
+        super(GrowingRegPruner, self).step(interactive=interactive)
         # update the group list after pruning
         self._groups = list(self.DG.get_all_groups(root_module_types=self.root_module_types, ignored_layers=self.ignored_layers))
+        group_reg = {}
+        for group in self._groups:
+            group_reg[group] = torch.ones(len(group[0].idxs)) * self.base_reg
+        self.group_reg = group_reg
 
-    def regularize(self, model, reg=None, bias=False):
-        if reg is None:
-            reg = self.reg # use the default reg
+    def regularize(self, model, bias=False):
+        for i, group in enumerate(self._groups):
+            group_l2norm_sq = self.estimate_importance(group)
+            if group_l2norm_sq is None:
+                continue
+            gamma = self.group_reg[group]
+            for k, (dep, idxs) in enumerate(group):
+                layer = dep.layer
+                pruning_fn = dep.pruning_fn
 
-        if self.group_lasso==False:
-            for m in model.modules():
-                if isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)) and m.affine==True and m not in self.ignored_layers:
-                    if m.weight.grad is None: continue
-                    m.weight.grad.data.add_(reg*torch.sign(m.weight.data))
-        else:
-            for group in self._groups:
-                group_l2norm_sq = self._l2_imp(group)
-                if group_l2norm_sq is None:
-                    continue
-                gamma = reg * (1 / group_l2norm_sq.sqrt())
+                if isinstance(layer, nn.modules.batchnorm._BatchNorm) and layer.affine == True and layer not in self.ignored_layers:
+                    if layer.weight.grad is None: continue
 
-                for i, (dep, _) in enumerate(group):
-                    layer = dep.layer
-                    if isinstance(layer, nn.modules.batchnorm._BatchNorm) and layer.affine==True and layer not in self.ignored_layers:
+                    root_idxs = group[k].root_idxs
+                    _gamma = torch.index_select(gamma, 0, torch.tensor(root_idxs, device=gamma.device))
+                    
+                    layer.weight.grad.data[idxs].add_(_gamma.to(layer.weight.device) * layer.weight.data[idxs])
+                    if bias and layer.bias is not None:
+                        layer.bias.grad.data[idxs].add_(_gamma.to(layer.weight.device) * layer.bias.data[idxs])
+                elif isinstance(layer, (nn.modules.conv._ConvNd, nn.Linear)):
+                    if pruning_fn in [function.prune_conv_out_channels, function.prune_linear_out_channels] and layer not in self.ignored_layers:
                         if layer.weight.grad is None: continue
-                        root_idxs = group[i].root_idxs
+
+                        root_idxs = group[k].root_idxs
                         _gamma = torch.index_select(gamma, 0, torch.tensor(root_idxs, device=gamma.device))
-                        layer.weight.grad.data.add_(_gamma * layer.weight.data) # Group Lasso https://tibshirani.su.domains/ftp/sparse-grlasso.pdf
+
+                        w = layer.weight.data[idxs]
+                        g = w * _gamma.to(layer.weight.device).view(-1, *([1]*(len(w.shape)-1)))
+                        layer.weight.grad.data[idxs] += g
+
+                        if bias and layer.bias is not None:
+                            b = layer.bias.data[idxs]
+                            g = b * _gamma.to(layer.weight.device)
+                            layer.bias.grad.data[idxs] += g
+                    elif pruning_fn in [function.prune_conv_in_channels, function.prune_linear_in_channels]:
+                        if layer.weight.grad is None: continue
+                        root_idxs = group[k].root_idxs
+                        _gamma = torch.index_select(gamma, 0, torch.tensor(root_idxs, device=gamma.device))
+
+                        w = layer.weight.data[:, idxs]
+                        g = w * _gamma.to(layer.weight.device).view(1, -1, *([1]*(len(w.shape)-2)))
+                        layer.weight.grad.data[:, idxs] += g

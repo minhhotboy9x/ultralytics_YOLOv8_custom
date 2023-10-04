@@ -38,6 +38,10 @@ def on_batch_end2(trainer):
     """Logs scalar statistics at the end of a training batch."""
     _log_scalars({f'train/kd_loss={trainer.type_kd_loss} alpha={trainer.alpha_kd}': trainer.t_kdloss}, trainer.epoch + 1)
 
+def on_batch_end3(trainer):
+    """Logs scalar statistics at the end of a training batch."""
+    _log_scalars({f'train/kd_loss2=output_loss beta={trainer.beta_kd}': trainer.t_kdloss2}, trainer.epoch + 1)
+
 def on_fit_epoch_end2(trainer):
     """Logs scalar statistics at the end of a training batch."""
     for dict in trainer.stu_mean:

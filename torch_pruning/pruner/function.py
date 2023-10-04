@@ -39,6 +39,26 @@ __all__=[
 ]
 
 class BasePruningFunc(ABC):
+    """ Base class for layer pruner.
+    It should provide the following functionalities:
+        - prune_out_channels: prune out channels of a layer
+        - prune_in_channels: prune in channels of a layer
+        - get_out_channels: get the number of output channels of a layer
+        - get_in_channels: get the number of input channels of a layer
+    
+    To build the intra-layer dependency, please specify prune_out_channels = prune_in_channels. 
+
+    Example:
+    ```python
+    class MyPruner(BasePruningFunc):
+        def prune_out_channels(self, layer: nn.Module, idxs: Sequence[int]) -> nn.Module:
+            # prune out channels of a layer
+            pass
+        prune_in_channels = prune_out_channels # this line enables the intra-layer dependency
+    ```
+
+    If prune_out_channels != prune_in_channels, there will be no intra-layer dependency.
+    """
     TARGET_MODULES = ops.TORCH_OTHERS  # None
 
     def __init__(self, pruning_dim=1):
@@ -81,6 +101,12 @@ class BasePruningFunc(ABC):
         layer = pruning_fn(layer, idxs)
         return layer
 
+    def get_in_channel_groups(self, layer):
+        return 1
+    
+    def get_out_channel_groups(self, layer):
+        return 1
+
     def _prune_parameter_and_grad(self, weight, keep_idxs, pruning_dim):
         pruned_weight = torch.nn.Parameter(torch.index_select(weight, pruning_dim, torch.LongTensor(keep_idxs).to(weight.device)))
         if weight.grad is not None:
@@ -122,6 +148,12 @@ class ConvPruner(BasePruningFunc):
 
     def get_in_channels(self, layer):
         return layer.in_channels
+
+    def get_in_channel_groups(self, layer):
+        return layer.groups
+    
+    def get_out_channel_groups(self, layer):
+        return layer.groups
 
 
 class DepthwiseConvPruner(ConvPruner):
@@ -178,6 +210,7 @@ class BatchnormPruner(BasePruningFunc):
         layer.num_features = layer.num_features-len(idxs)
         layer.running_mean = layer.running_mean.data[keep_idxs]
         layer.running_var = layer.running_var.data[keep_idxs]
+
         if layer.affine:
             layer.weight = self._prune_parameter_and_grad(layer.weight, keep_idxs, 0)
             layer.bias = self._prune_parameter_and_grad(layer.bias, keep_idxs, 0)
@@ -247,6 +280,12 @@ class GroupNormPruner(BasePruningFunc):
 
     def get_in_channels(self, layer):
         return layer.num_channels
+
+    def get_in_channel_groups(self, layer):
+        return layer.num_groups
+    
+    def get_out_channel_groups(self, layer):
+        return layer.num_groups
 
 class InstanceNormPruner(BasePruningFunc):
     def prune_out_channels(self, layer: nn.Module, idxs: Sequence[int]) -> nn.Module:

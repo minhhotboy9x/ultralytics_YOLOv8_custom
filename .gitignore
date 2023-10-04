@@ -140,6 +140,9 @@ runs/
 wandb/
 KD/
 pruning/
+KD_feature_out/
+# Không bỏ qua thư mục ultralytics/datasets
+!ultralytics/datasets
 .vscode/
 
 .DS_Store

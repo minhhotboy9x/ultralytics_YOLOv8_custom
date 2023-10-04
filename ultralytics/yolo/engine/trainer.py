@@ -320,6 +320,7 @@ class BaseTrainer:
 
                 # Forward
                 with torch.cuda.amp.autocast(self.amp):
+                    # print(f'----------------{batch["img"].shape}-------------------')
                     batch = self.preprocess_batch(batch)
                     preds = self.model(batch['img']) # predict
                     self.loss, self.loss_items = self.criterion(preds, batch) # cal loss

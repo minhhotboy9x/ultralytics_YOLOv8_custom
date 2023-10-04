@@ -21,6 +21,7 @@ from ultralytics.yolo.utils.checks import check_yaml
 from ultralytics.yolo.utils.dist import ddp_cleanup, generate_ddp_command
 from ultralytics.yolo.cfg import get_cfg
 from tqdm import tqdm
+from ultralytics.yolo.utils.callbacks.tensorboard import on_batch_end3
 
 class KLDLoss(nn.Module):
     def __init__(self):
@@ -169,9 +170,9 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                         self.kd_loss *= world_size
                 self.tloss = (self.tloss * i + self.loss_items) / (i + 1) if self.tloss is not None \
                     else self.loss_items
-
             # Backward
-            self.scaler.scale(self.loss + 0.2 * self.kd_loss).backward()
+            self.alpha_kd = 2.0 # default 2.0
+            self.scaler.scale(self.loss + self.alpha_kd * self.kd_loss).backward()
 
             # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
             if ni - last_opt_step >= self.accumulate:
@@ -311,9 +312,9 @@ def train_v2(self: YOLO,  **kwargs):
 
 
 def main(args):
-
     args = get_cfg(DEFAULT_CFG, vars(args))
     model = YOLO(args.model)
+    model.add_callback('on_batch_end', on_batch_end3)
     model.train_v2 = train_v2.__get__(model)
     model.train_v2(**vars(args))
 
