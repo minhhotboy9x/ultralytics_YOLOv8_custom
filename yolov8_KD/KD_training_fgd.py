@@ -118,7 +118,7 @@ class FocalLoss(nn.Module):
         '''
         return Ms, Ss
 
-    def attention_masks(self, features, T=1):
+    def attention_masks(self, features, T=0.5):
         Ass = []
         Acs = [] 
         for feature in features:
@@ -187,7 +187,7 @@ class GcBlock(nn.Module):
     def forward(self, x):
         b, c, h, w = x.size()
         x1 = self.Wk(x) # b, 1, H, W
-        x1 = x1.view(b, 1, h*w) # b, 1, w*h
+        x1 = x1.view(b, 1, h*w) # b, 1, h*w
         x1 = x1.unsqueeze(1).permute(0, 3, 1, 2) # b, h*w, 1, 1
         x1 = self.softmax2d(x1)
         x1 = x1.view(b, h*w, 1) # b, h*w, 1
@@ -206,11 +206,11 @@ class GcBlock(nn.Module):
 
 def cal_kd_loss(student_preds, teacher_preds, batch, gc_blocks):
     focal_cri = FocalLoss()
-    global_cri = GlobalLoss()
+    # global_cri = GlobalLoss() 
     l_focal = focal_cri(student_preds, teacher_preds, batch)
-    l_global = global_cri(student_preds, teacher_preds, gc_blocks)
-    # print(f'-----------{l_global}-----------')
-    return l_focal + l_global
+    # l_global = global_cri(student_preds, teacher_preds, gc_blocks)
+    # print(f'-----------{type(l_global)}--------------{type(l_focal)}----------')
+    return l_focal
 
 def _do_train_v2(self: BaseTrainer, world_size=1):
         """Train completed, evaluate and plot if specified by arguments."""
@@ -252,7 +252,7 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                 _, teacher_channel, teacher_out_size, _ = teacher_feature[i].shape
                 stu_feature_adapts.append(nn.Sequential(nn.Conv2d(student_channel, teacher_channel, 1,
                                                         padding=0, stride=1)).to(self.device))
-                gc_blocks.append(GcBlock(c=teacher_channel).to(self.device))
+                # gc_blocks.append(GcBlock(c=teacher_channel).to(self.device)) # disable gcblock
             
 
         for epoch in range(self.start_epoch, self.epochs):
@@ -317,9 +317,6 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                         for i in range(len(features)):
                             # print(f'-------------{stu_feature_adapts[i]}')
                             stu_feature_maps.append(stu_feature_adapts[i](features[i]))
-
-                        fgd_loss = FocalLoss()
-                        fgd_loss.forward(stu_feature_maps, [f.detach() for f in teacher_features], batch) # debug
 
                         self.kd_loss = cal_kd_loss(stu_feature_maps, 
                                                 [f.detach() for f in teacher_features], batch, gc_blocks)
