@@ -19,40 +19,11 @@ from ultralytics.yolo.utils import (yaml_load, LOGGER, RANK, DEFAULT_CFG_DICT, T
                             DEFAULT_CFG_KEYS, DEFAULT_CFG, callbacks, clean_url, colorstr, emojis, yaml_save)
 from ultralytics.yolo.utils.checks import check_yaml
 from ultralytics.yolo.utils.dist import ddp_cleanup, generate_ddp_command
-from pytorch_msssim import ssim
 from ultralytics.yolo.cfg import get_cfg
 from tqdm import tqdm
 from ultralytics.yolo.utils.callbacks.tensorboard import on_batch_end2, on_fit_epoch_end2
-
-class MinMaxRescalingLayer(nn.Module):
-    def __init__(self):
-        super(MinMaxRescalingLayer, self).__init__()
-
-    def forward(self, x, y):
-        min_val = torch.min(x.min(-1)[0].min(-1)[0], y.min(-1)[0].min(-1)[0])
-        max_val = torch.max(x.max(-1)[0].max(-1)[0], y.max(-1)[0].min(-1)[0])
-        
-        # Kiểm tra và xử lý trường hợp mẫu số bằng 0
-        denominator_zero_mask = (max_val - min_val) == 0
-        max_val = torch.where(denominator_zero_mask, max_val + 1e-6, max_val)
-        
-        rescaled_x = (x - min_val[:,:,None,None]) / (max_val[:,:,None,None] - min_val[:,:,None,None])
-        rescaled_y = (y - min_val[:,:,None,None]) / (max_val[:,:,None,None] - min_val[:,:,None,None])
-        return rescaled_x, rescaled_y
-
-class DSSIM(nn.Module):
-    def __init__(self, device = 'cpu'):
-        super(DSSIM, self).__init__()
-        self.device = device
-        self.scaler = MinMaxRescalingLayer()
-
-    def forward(self, y_pred, y_true): 
-        y_pred_scaled, y_true_scaled = self.scaler(y_pred, y_true)
-        loss = ssim(y_pred_scaled, y_true_scaled, data_range=1.0)
-        loss = (1-loss)/2
-        # print(f'------------{type(loss)}--------------')
-        return loss
-
+from yolov8_KD.KD_loss import DSSIM
+from utils import add_params_kd
 
 def cal_kd_loss(student_preds, teacher_preds, type_kd_loss='DSSIM'):
     if type_kd_loss.upper() == 'DSSIM':
@@ -105,9 +76,10 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                 _, student_channel, student_out_size, _ = features[i].shape
                 _, teacher_channel, teacher_out_size, _ = teacher_feature[i].shape
                 stu_feature_adapts.append(nn.Sequential(nn.Conv2d(student_channel, teacher_channel, 1,
-                                                        padding=0, stride=1)).to(self.device))
-            
-            
+                                                        padding=0, stride=1, bias=False),
+                                                        nn.SiLU()).to(self.device))
+            if self.args.train_adapter:
+                self.add_params_kd(stu_feature_adapts)
 
         for epoch in range(self.start_epoch, self.epochs):
             self.epoch = epoch
@@ -149,7 +121,7 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                     for j, x in enumerate(self.optimizer.param_groups):
                         # Bias lr falls from 0.1 to lr0, all other lrs rise from 0.0 to lr0
                         x['lr'] = np.interp(
-                            ni, xi, [self.args.warmup_bias_lr if j == 0 else 0.0, x['initial_lr'] * self.lf(epoch)])
+                            ni, xi, [self.args.warmup_bias_lr if j == 0 else 0.0, x.get('initial_lr', self.args.lr0) * self.lf(epoch)])
                         if 'momentum' in x:
                             x['momentum'] = np.interp(ni, xi, [self.args.warmup_momentum, self.args.momentum])
 
@@ -333,6 +305,7 @@ def train_v2(self: YOLO,  **kwargs):
     self.trainer.train_v2 = trainer_train_v2.__get__(self.trainer)
     self.trainer._do_train_v2 = _do_train_v2.__get__(self.trainer)
     self.trainer.progress_string = progress_string_v2.__get__(self.trainer)
+    self.trainer.add_params_kd = add_params_kd.__get__(self.trainer)
     self.trainer.train_v2()
     # Update model and cfg after training
     if RANK in (-1, 0):
@@ -364,8 +337,10 @@ if __name__ == "__main__":
     parser.add_argument('--epochs', type=int, default=10, help='epochs')
     parser.add_argument('--imgsz', type=int, default=640, help='Size of input images')
     parser.add_argument('--workers', type=int, default=4, help="number of worker threads for data loading (per RANK if DDP)")
-    parser.add_argument('--resume', type=bool, default=False, help="continue training (if KD, must provide teacher)")
-    
+    parser.add_argument('--resume', type=bool, default=False, help="continue training (if KD, must provide teacher)")  
+    parser.add_argument('--lr0', type=float, default=0.01, help="initial learning rate (i.e. SGD=1E-2, Adam=1E-3)")  
+    parser.add_argument('--train_adapter', type=bool, default=False, help='enable training feature adaptation or not')
+
     args = parser.parse_args()
 
     main(args)

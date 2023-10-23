@@ -1,7 +1,6 @@
 import subprocess
 import time
 import argparse
-import math
 import os, sys
 
 ultralytics_dir = os.path.abspath("./")
@@ -21,8 +20,19 @@ from ultralytics.yolo.utils.checks import check_yaml
 from ultralytics.yolo.utils.dist import ddp_cleanup, generate_ddp_command
 from ultralytics.yolo.cfg import get_cfg
 from tqdm import tqdm
-from ultralytics.yolo.utils.callbacks.tensorboard import on_batch_end3
-from yolov8_KD.KD_loss import head_loss
+from ultralytics.yolo.utils.callbacks.tensorboard import on_batch_end2, on_batch_end3, on_fit_epoch_end2
+from yolov8_KD.KD_loss import FGFI, BoxGauss, head_loss
+from utils import add_params_kd
+
+def cal_kd_loss(student_preds, teacher_preds, batch, type_kd_loss='FGFI'):
+    # print(type_kd_loss)
+    if type_kd_loss.upper() == 'FGFI':
+        criterion = FGFI().to(teacher_preds[0].device)
+    else:
+        criterion = BoxGauss().to(teacher_preds[0].device)
+        
+    loss = criterion(student_preds, teacher_preds, batch)
+    return loss
 
 def _do_train_v2(self: BaseTrainer, world_size=1):
     """Train completed, evaluate and plot if specified by arguments."""
@@ -46,23 +56,31 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
         self.plot_idx.extend([base_idx, base_idx + 1, base_idx + 2])
 
 
-    # create knowledge distillation function
+    # create imitation mask for knowledge distillation
+    mask_id = self.args.kd_layer
     if hasattr(self, 'teacher'):
-        dump_image = torch.randn((1, 3, self.args.imgsz, self.args.imgsz), device=self.device)
+        self.type_kd_loss = self.args.type_kd_loss # -----------------get type kd loss-----------------
+        self.teacher.train() 
+        dump_image = torch.zeros((1, 3, self.args.imgsz, self.args.imgsz), device=self.device)
 
-        preds = self.model(dump_image)  # forward
-        teacher_preds = self.teacher(dump_image) 
-        self.cal_kd_loss = head_loss.__get__(self)
+        _, features = self.model(dump_image, mask_id = mask_id)  # forward
+        _, teacher_feature= self.teacher(dump_image, mask_id = mask_id) 
         
-        # print(self.cal_kd_loss(preds, teacher_preds)) # test kl loss
-        
+        stu_feature_adapts = [] # contain imitation
+
+        for i in range(len(features)):
+            _, student_channel, student_out_size, _ = features[i].shape
+            _, teacher_channel, teacher_out_size, _ = teacher_feature[i].shape
+            stu_feature_adapts.append(nn.Sequential(nn.Conv2d(student_channel, teacher_channel, 1,
+                                                    padding=0, stride=1, bias=False),
+                                                    nn.SiLU()).to(self.device))
+        if self.args.train_adapter:
+            self.add_params_kd(stu_feature_adapts)
 
     for epoch in range(self.start_epoch, self.epochs):
         self.epoch = epoch
         self.run_callbacks('on_train_epoch_start')
         self.model.train()
-        if hasattr(self, 'teacher'):
-            self.teacher.train() 
 
         if RANK != -1:
             self.train_loader.sampler.set_epoch(epoch)
@@ -78,6 +96,17 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
             LOGGER.info(self.progress_string())
             pbar = tqdm(enumerate(self.train_loader), total=nb, bar_format=TQDM_BAR_FORMAT)
         self.tloss = None
+        self.t_kdloss = 0 # mean of kd loss
+        self.t_kdloss2 = 0 # mean of kd loss
+
+        #----------------mean feat-----------------
+        self.stu_mean = []
+        self.tea_mean = []
+        for id in mask_id:
+            self.stu_mean.append({id: 0})
+            self.tea_mean.append({id: 0})
+        #------------------------------------------------
+
         self.optimizer.zero_grad()
         for i, batch in pbar:
             self.run_callbacks('on_train_batch_start')
@@ -89,35 +118,59 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                 for j, x in enumerate(self.optimizer.param_groups):
                     # Bias lr falls from 0.1 to lr0, all other lrs rise from 0.0 to lr0
                     x['lr'] = np.interp(
-                        ni, xi, [self.args.warmup_bias_lr if j == 0 else 0.0, x['initial_lr'] * self.lf(epoch)])
+                        ni, xi, [self.args.warmup_bias_lr if j == 0 else 0.0, x.get('initial_lr', self.args.lr0) * self.lf(epoch)])
                     if 'momentum' in x:
                         x['momentum'] = np.interp(ni, xi, [self.args.warmup_momentum, self.args.momentum])
 
             # Forward
             with torch.cuda.amp.autocast(self.amp):
                 batch = self.preprocess_batch(batch)
-                self.kd_loss = 0.0 # make a kd_loss
+                self.kd_loss = 0.0 # make a kd_loss feat
+                self.kd_loss2 = 0.0 # make a kd_loss output
 
                 if hasattr(self, 'teacher'):
-                    preds =  self.model(batch['img'])
-                    teacher_preds =  self.teacher(batch['img'])
-                    self.kd_loss = self.cal_kd_loss(preds, teacher_preds)
+                    preds, features =  self.model(batch['img'], mask_id = mask_id)
+                    teacher_preds, teacher_features =  self.teacher(batch['img'], mask_id = mask_id)
+                    self.kd_loss2 = head_loss(self, preds, [out.detach() for out in teacher_preds]) # head KD
                 else:
                     preds = self.model(batch['img']) # predict
 
                 self.loss, self.loss_items = self.criterion(preds, batch) # cal loss
 
-                # print(f'--------------{self.kd_loss}---------------')
+                if hasattr(self, 'teacher'):
+                    stu_feature_maps = []
+                    for i in range(len(features)):
+                        # print(f'-------------{stu_feature_adapts[i]}')
+                        stu_feature_maps.append(stu_feature_adapts[i](features[i]))
 
+                    self.kd_loss = cal_kd_loss(stu_feature_maps, 
+                                            [f.detach() for f in teacher_features], batch, self.type_kd_loss)
+                    
+                    #--------------------------------------------------------
+                    with torch.no_grad():
+                        for j in range(len(mask_id)):
+                            self.stu_mean[j][mask_id[j]] = (self.stu_mean[j][mask_id[j]] * i + torch.mean(stu_feature_maps[j])) / (i+1)
+                            self.tea_mean[j][mask_id[j]] = (self.tea_mean[j][mask_id[j]] * i + torch.mean(teacher_features[j])) / (i+1)
+                    
+                    #-----------------------------------------------------------
+                
                 if RANK != -1:
                     self.loss *= world_size
                     if hasattr(self, 'teacher'):
                         self.kd_loss *= world_size
+                        self.kd_loss2 *= world_size
+
+                #-------------------------------------------------------
+                self.t_kdloss = (self.t_kdloss * i + self.kd_loss) / (i + 1)
+                self.t_kdloss2 = (self.t_kdloss2 * i + self.kd_loss2) / (i + 1)
+                
                 self.tloss = (self.tloss * i + self.loss_items) / (i + 1) if self.tloss is not None \
                     else self.loss_items
+
             # Backward
-            self.alpha_kd = 2.0 # default 2.0
-            self.scaler.scale(self.loss + self.alpha_kd * self.kd_loss).backward()
+            self.alpha_kd = 0.01 # default 0.01
+            self.beta_kd = 0.01 # default 0.01
+            self.scaler.scale(self.loss + self.alpha_kd*self.kd_loss  + self.beta_kd*self.kd_loss2).backward()
 
             # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
             if ni - last_opt_step >= self.accumulate:
@@ -129,9 +182,11 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
             loss_len = self.tloss.shape[0] if len(self.tloss.size()) else 1
             losses = self.tloss if loss_len > 1 else torch.unsqueeze(self.tloss, 0)
             if RANK in (-1, 0):
+                # + '\n' + '%15.5g' * (1 + len(mask_id)*2)
+                # , self.kd_loss
                 pbar.set_description(
-                    ('%11s' * 2 + '%11.4g' * (2 + loss_len)) %
-                    (f'{epoch + 1}/{self.epochs}', mem, *losses, batch['cls'].shape[0], batch['img'].shape[-1]))
+                    ('%11s' * 2 + '%11.4g' * (2 + loss_len) + '%11.4g' * 2) % 
+                    (f'{epoch + 1}/{self.epochs}', mem, *losses, batch['cls'].shape[0], batch['img'].shape[-1], self.t_kdloss, self.t_kdloss2))
                 self.run_callbacks('on_batch_end')
                 if self.args.plots and ni in self.plot_idx:
                     self.plot_training_samples(batch, ni)
@@ -140,7 +195,9 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
 
         self.lr = {f'lr/pg{ir}': x['lr'] for ir, x in enumerate(self.optimizer.param_groups)}  # for loggers
 
+        # scheduler step
         self.scheduler.step()
+
         self.run_callbacks('on_train_epoch_end')
 
         if RANK in (-1, 0):
@@ -193,7 +250,6 @@ def trainer_train_v2(self: BaseTrainer):
         world_size = 1  # default to device 0
     else:  # i.e. device='cpu' or 'mps'
         world_size = 0
-
     # Run subprocess if DDP training, else train normally
     if world_size > 1 and 'LOCAL_RANK' not in os.environ:
         # Argument checks
@@ -212,11 +268,16 @@ def trainer_train_v2(self: BaseTrainer):
     else:
         self._do_train_v2(world_size)
 
+def progress_string_v2(self: BaseTrainer):
+    """Returns a formatted string of training progress with epoch, GPU memory, loss, instances and size."""
+    return ('\n' + '%11s' *
+            (4 + len(self.loss_names))  + '%11s'*2) % \
+            ('Epoch', 'GPU_mem', *self.loss_names, 'Instances', 'Size', 'KD_loss', 'KD_loss2')
+
 def train_v2(self: YOLO,  **kwargs):
     """
     Disabled loading new model when pruning flag is set. originated from ultralytics/yolo/engine/model.py
     """
-
     self._check_is_pytorch_model()
     if self.session:  # Ultralytics HUB session
         if any(kwargs):
@@ -235,7 +296,6 @@ def train_v2(self: YOLO,  **kwargs):
 
     self.task = overrides.get('task') or self.task
     self.trainer = TASK_MAP[self.task][1](overrides=overrides, _callbacks=self.callbacks)
-
     if not overrides.get('resume'):  # manually set model only if not resuming
         self.trainer.model = self.trainer.get_model(weights=self.model if self.ckpt else None, cfg=self.model.yaml)
         self.model = self.trainer.model
@@ -245,9 +305,12 @@ def train_v2(self: YOLO,  **kwargs):
     # get teacher for KD by adding teacher attribute for trainer of model
     if kwargs.get('teacher'):
         self.trainer.teacher = YOLO(kwargs['teacher']).model.to(self.trainer.device)
+        
 
     self.trainer.train_v2 = trainer_train_v2.__get__(self.trainer)
     self.trainer._do_train_v2 = _do_train_v2.__get__(self.trainer)
+    self.trainer.progress_string = progress_string_v2.__get__(self.trainer)
+    self.trainer.add_params_kd = add_params_kd.__get__(self.trainer)
     self.trainer.train_v2()
     # Update model and cfg after training
     if RANK in (-1, 0):
@@ -255,11 +318,12 @@ def train_v2(self: YOLO,  **kwargs):
         self.overrides = self.model.args
         self.metrics = getattr(self.trainer.validator, 'metrics', None)
 
-
 def main(args):
     args = get_cfg(DEFAULT_CFG, vars(args))
     model = YOLO(args.model)
+    model.add_callback('on_batch_end', on_batch_end2)
     model.add_callback('on_batch_end', on_batch_end3)
+    model.add_callback('on_fit_epoch_end', on_fit_epoch_end2)
     model.train_v2 = train_v2.__get__(model)
     model.train_v2(**vars(args))
 
@@ -268,20 +332,22 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='yolov8m.yaml', help='Pretrained pruning target model file')
-    parser.add_argument('--teacher', help='teacher model') # kd output of model
-    
+    parser.add_argument('--teacher', help='teacher model')
+    parser.add_argument('--kd_layer', nargs='*', type=int, default=[15, 18, 21], help="id of layers for KD")
+    parser.add_argument('--type_kd_loss', default='FGFI', help='type of kd loss for feature maps')
+
     parser.add_argument('--batch', default=4, type=int, help='batch_size')
     parser.add_argument('--data', default='coco128.yaml', help='dataset')
     parser.add_argument('--device', default=0, help='cpu or gpu')
-    parser.add_argument('--project', default='KD', help='project name')
+    parser.add_argument('--project', default='KD_feature_out', help='project name')
     parser.add_argument('--epochs', type=int, default=10, help='epochs')
     parser.add_argument('--imgsz', type=int, default=640, help='Size of input images')
     parser.add_argument('--workers', type=int, default=4, help="number of worker threads for data loading (per RANK if DDP)")
     parser.add_argument('--resume', type=bool, default=False, help="continue training (if KD, must provide teacher)")
-    parser.add_argument('--lr0', type=float, default=0.01, help="initial learning rate (i.e. SGD=1E-2, Adam=1E-3)")  
-    
-    args = parser.parse_args()
+    parser.add_argument('--lr0', type=float, default=0.01, help="initial learning rate (i.e. SGD=1E-2, Adam=1E-3)") 
+    parser.add_argument('--train_adapter', type=bool, default=False, help='enable training feature adaptation or not')
 
+    args = parser.parse_args()
 
     main(args)
     

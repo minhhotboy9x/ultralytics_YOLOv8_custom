@@ -135,7 +135,7 @@ class Loss:
 
         self.assigner = TaskAlignedAssigner(topk=10, num_classes=self.nc, alpha=0.5, beta=6.0)
         self.bbox_loss = BboxLoss(m.reg_max - 1, use_dfl=self.use_dfl).to(device)
-        self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
+        self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device) # (0->15)
 
     def preprocess(self, targets, batch_size, scale_tensor):
         """Preprocesses the target counts and matches with the input batch size to output a tensor."""
@@ -158,7 +158,7 @@ class Loss:
         """Decode predicted object bounding box coordinates from anchor points and distribution."""
         if self.use_dfl:
             b, a, c = pred_dist.shape  # batch, anchors, channels
-            pred_dist = pred_dist.view(b, a, 4, c // 4).softmax(3).matmul(self.proj.type(pred_dist.dtype))
+            pred_dist = pred_dist.view(b, a, 4, c // 4).softmax(3).matmul(self.proj.type(pred_dist.dtype)) # (b, a, 4)
             # pred_dist = pred_dist.view(b, a, c // 4, 4).transpose(2,3).softmax(3).matmul(self.proj.type(pred_dist.dtype))
             # pred_dist = (pred_dist.view(b, a, c // 4, 4).softmax(2) * self.proj.type(pred_dist.dtype).view(1, 1, -1, 1)).sum(2)
         return dist2bbox(pred_dist, anchor_points, xywh=False)
@@ -192,7 +192,16 @@ class Loss:
         _, target_bboxes, target_scores, fg_mask, _ = self.assigner(
             pred_scores.detach().sigmoid(), (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
             anchor_points * stride_tensor, gt_labels, gt_bboxes, mask_gt)
-
+        '''
+            target_bboxes: (16, 8400, 4), (b, num_anchor, 4 edge)
+            target_scores: (16, 8400, 80), (b, num_anchor, classes)
+            pred_bboxes: (16, 8400, 4), (b, num_anchor, 4 edge)
+            anchor_points: (8400, 2), (num_anchor, xy)
+            pred_scores: (16, 8400, 80), (b, num_anchor, classes)
+            stride_tensor: (8400. 1), (num_anchors, 1) # stride from feature maps to original images
+            fg_mask: (16, 8400), (b, num_anchor) # mask to get prediction for each gt box (bool)
+            self.stride = model.stride: (3)
+        '''
         target_bboxes /= stride_tensor
         target_scores_sum = max(target_scores.sum(), 1)
 

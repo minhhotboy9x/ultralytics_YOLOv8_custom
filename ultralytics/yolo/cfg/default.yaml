@@ -6,6 +6,7 @@ mode: train  # YOLO mode, i.e. train, val, predict, export, track, benchmark
 teacher:
 kd_layer:
 type_kd_loss:
+train_adapter: False
 
 # Train settings -------------------------------------------------------------------------------------------------------
 model:  # path to model file, i.e. yolov8n.pt, yolov8n.yaml

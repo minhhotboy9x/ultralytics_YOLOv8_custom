@@ -109,7 +109,6 @@ class BaseTrainer:
         self.start_epoch = 0
         if RANK == -1:
             print_args(vars(self.args))
-
         # Device
         if self.device.type == 'cpu':
             self.args.workers = 0  # faster CPU training as time dominated by inference, not dataloading

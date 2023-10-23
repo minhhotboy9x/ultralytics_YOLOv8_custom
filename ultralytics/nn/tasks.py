@@ -21,7 +21,6 @@ class BaseModel(nn.Module):
     """
     The BaseModel class serves as a base class for all the models in the Ultralytics YOLO family.
     """
-
     def forward(self, x, profile=False, visualize=False, mask_id = []):
         """
         Forward pass of the model on a single scale.
@@ -452,7 +451,6 @@ def attempt_load_one_weight(weight, device=None, inplace=True, fuse=False):
 def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
     # Parse a YOLO model.yaml dictionary into a PyTorch model
     import ast
-
     # Args
     max_channels = float('inf')
     nc, act, scales = (d.get(x) for x in ('nc', 'act', 'scales'))
