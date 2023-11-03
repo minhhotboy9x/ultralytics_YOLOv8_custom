@@ -82,6 +82,35 @@ class MinMaxRescalingLayer(nn.Module):
         rescaled_y = (y - min_val[:,:,None,None]) / (max_val[:,:,None,None] - min_val[:,:,None,None])
         return rescaled_x, rescaled_y
 
+class MSELoss(nn.Module):
+    def __init__(self):
+        super(MSELoss, self).__init__()
+    
+    def forward(self, y_pred, y_true):
+        mse = nn.MSELoss(reduction='mean')
+        loss = 0
+        for i in range(len(y_pred)):
+            loss += mse(y_pred[i], y_true[i])
+        loss /= len(y_pred)
+        return loss
+
+class DSSIMLoss(nn.Module):
+    def __init__(self, device = 'cpu'):
+        super(DSSIMLoss, self).__init__()
+        self.device = device
+        self.scaler = MinMaxRescalingLayer()
+
+    def forward(self, y_pred, y_true): 
+        t_loss = 0
+        for i in range(len(y_pred)):
+            y_pred_scaled, y_true_scaled = self.scaler(y_pred[i], y_true[i])
+            loss = ssim(y_pred_scaled, y_true_scaled, data_range=1.0)
+            loss = (1-loss)/2
+            t_loss += loss
+        t_loss /= len(y_pred)
+        # print(f'------------{type(t_loss)}--------------')
+        return t_loss
+
 class DSSIM(nn.Module):
     def __init__(self, device = 'cpu'):
         super(DSSIM, self).__init__()

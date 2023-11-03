@@ -21,17 +21,27 @@ from ultralytics.yolo.utils.dist import ddp_cleanup, generate_ddp_command
 from ultralytics.yolo.cfg import get_cfg
 from tqdm import tqdm
 from ultralytics.yolo.utils.callbacks.tensorboard import on_batch_end2, on_batch_end3, on_fit_epoch_end2
-from yolov8_KD.KD_loss import FGFI, BoxGauss, head_loss
+from yolov8_KD.KD_loss import FGFI, BoxGauss, MSELoss, DSSIMLoss, head_loss
 from utils import add_params_kd
 
 def cal_kd_loss(student_preds, teacher_preds, batch, type_kd_loss='FGFI'):
     # print(type_kd_loss)
     if type_kd_loss.upper() == 'FGFI':
         criterion = FGFI().to(teacher_preds[0].device)
-    else:
+    elif type_kd_loss.upper() == 'MSE':
+        criterion = MSELoss().to(teacher_preds[0].device)
+    elif type_kd_loss.upper() == 'DSSIM':
+        criterion = DSSIMLoss().to(teacher_preds[0].device)
+    elif type_kd_loss.upper() == 'BOXGAUSS':
         criterion = BoxGauss().to(teacher_preds[0].device)
-        
-    loss = criterion(student_preds, teacher_preds, batch)
+    else:
+        raise NameError("-----This loss is not available-------")
+    t = type(criterion)
+    if t in (MSELoss, DSSIMLoss):
+        loss = criterion(student_preds, teacher_preds)
+    else:
+        loss = criterion(student_preds, teacher_preds, batch)
+    # print(f'--------------{type(loss)}---------------')
     return loss
 
 def _do_train_v2(self: BaseTrainer, world_size=1):

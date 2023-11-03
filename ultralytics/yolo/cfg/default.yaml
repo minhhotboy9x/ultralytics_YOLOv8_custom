@@ -5,6 +5,8 @@ task: detect  # YOLO task, i.e. detect, segment, classify, pose
 mode: train  # YOLO mode, i.e. train, val, predict, export, track, benchmark
 teacher:
 kd_layer:
+teacher_kd_layer:
+student_kd_layer:
 type_kd_loss:
 train_adapter: False
 
