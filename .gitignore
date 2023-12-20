@@ -135,7 +135,7 @@ dmypy.json
 KD_feature/
 coco_kd/
 coco_128/
-datasets/
+/datasets/
 runs/
 wandb/
 KD/
