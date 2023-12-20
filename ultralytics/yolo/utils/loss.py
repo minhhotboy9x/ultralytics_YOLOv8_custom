@@ -37,6 +37,9 @@ class BboxLoss(nn.Module):
         weight = torch.masked_select(target_scores.sum(-1), fg_mask).unsqueeze(-1)
         iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
         loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+        # iou2 = bbox_iou(pred_bboxes.view(-1, pred_bboxes.shape[2]), target_bboxes.view(-1, target_bboxes.shape[2]), xywh=False, CIoU=True)
+        # print(f'-----{iou.shape}---------------------')
+        # print(f'-----{pred_bboxes[fg_mask].shape}------------{target_bboxes[fg_mask].shape}----------')
 
         # DFL loss
         if self.use_dfl:

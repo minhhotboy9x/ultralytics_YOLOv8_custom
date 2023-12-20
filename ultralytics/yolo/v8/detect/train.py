@@ -17,7 +17,6 @@ from ultralytics.yolo.utils.plotting import plot_images, plot_labels, plot_resul
 from ultralytics.yolo.utils.tal import TaskAlignedAssigner, dist2bbox, make_anchors
 from ultralytics.yolo.utils.torch_utils import de_parallel
 
-
 # BaseTrainer python usage
 class DetectionTrainer(BaseTrainer):
 
@@ -145,13 +144,13 @@ class Loss:
             i = targets[:, 0]  # image index
             _, counts = i.unique(return_counts=True)
             counts = counts.to(dtype=torch.int32)
-            out = torch.zeros(batch_size, counts.max(), 5, device=self.device)
+            out = torch.zeros(batch_size, counts.max(), 5, device=self.device) # (b, max_obj, 5)
             for j in range(batch_size):
                 matches = i == j
                 n = matches.sum()
                 if n:
                     out[j, :n] = targets[matches, 1:]
-            out[..., 1:5] = xywh2xyxy(out[..., 1:5].mul_(scale_tensor))
+            out[..., 1:5] = xywh2xyxy(out[..., 1:5].mul_(scale_tensor)) # (b, max_obj, 5)
         return out
 
     def bbox_decode(self, anchor_points, pred_dist):
@@ -183,7 +182,7 @@ class Loss:
         # targets
         targets = torch.cat((batch['batch_idx'].view(-1, 1), batch['cls'].view(-1, 1), batch['bboxes']), 1)
         
-        targets = self.preprocess(targets.to(self.device), batch_size, scale_tensor=imgsz[[1, 0, 1, 0]])
+        targets = self.preprocess(targets.to(self.device), batch_size, scale_tensor=imgsz[[1, 0, 1, 0]]) # (b, max_obj, 5)
         gt_labels, gt_bboxes = targets.split((1, 4), 2)  # cls, xyxy
         mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0)
         # pboxes
@@ -202,6 +201,7 @@ class Loss:
             fg_mask: (16, 8400), (b, num_anchor) # mask to get prediction for each gt box (bool)
             self.stride = model.stride: (3)
         '''
+
         target_bboxes /= stride_tensor
         target_scores_sum = max(target_scores.sum(), 1)
 

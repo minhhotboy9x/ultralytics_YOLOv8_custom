@@ -9,6 +9,7 @@ from ultralytics.yolo.engine.trainer import BaseTrainer
 from ultralytics.yolo.utils import (yaml_load, LOGGER, RANK, DEFAULT_CFG_DICT, TQDM_BAR_FORMAT, 
                             DEFAULT_CFG_KEYS, DEFAULT_CFG, callbacks, clean_url, colorstr, emojis, yaml_save)
 from pytorch_msssim import ssim
+from utils import GetKeyRegion
 ultralytics_dir = os.path.abspath("./")
 
 def head_loss(self: BaseTrainer, student_preds, teacher_preds, T=3.0):
@@ -322,7 +323,7 @@ class FGFI(nn.Module):
         mse = nn.MSELoss(reduction='sum')
         L_imi = 0
         for i in range(len(y_pred)):
-            N_pos_points = torch.sum(Ms[i])
+            N_pos_points = torch.sum(Ms[i]) + 1
             tmp_stu_feat = Ms[i] * y_pred[i]
             tmp_tea_feat = Ms[i] * y_true[i]
             L_imi = L_imi + mse(tmp_stu_feat, tmp_tea_feat) / N_pos_points
@@ -364,15 +365,14 @@ class BoxGauss(nn.Module):
         mse = nn.MSELoss(reduction='sum')
         L_imi = 0
         for i in range(len(y_pred)):
-            N_pos_points = torch.sum(Ms[i])
+            N_pos_points = torch.sum(Ms[i]) + 1
             tmp_stu_feat = Ms[i] * y_pred[i]
             tmp_tea_feat = Ms[i] * y_true[i]
             L_imi = L_imi + mse(tmp_stu_feat, tmp_tea_feat) / N_pos_points
         L_imi /= len(Ms)
         # print(f'----------kd-----{L_imi.requires_grad}----------------')
         return L_imi
-    
-
+        
 class ChannelNorm(nn.Module):
     def __init__(self):
         super(ChannelNorm, self).__init__()

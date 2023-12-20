@@ -2,7 +2,7 @@ import subprocess
 import time
 import argparse
 import math
-import os, sys
+import os, sys, copy
 '''Train the stu which are attached to adaptation (s-m)'''
 ultralytics_dir = os.path.abspath("./")
 # Thêm đường dẫn của folder cha vào sys.path
@@ -23,221 +23,231 @@ from ultralytics.yolo.cfg import get_cfg
 from tqdm import tqdm
 from ultralytics.yolo.utils.callbacks.tensorboard import on_batch_end2, on_fit_epoch_end2
 from yolov8_KD.KD_loss import FGFI, BoxGauss, MSELoss, DSSIMLoss
+from yolov8_KD.KD_loss2 import RMPG, LDLoss
+from utils import ExponentialDecayVariable
 
-def cal_kd_loss(student_preds, teacher_preds, batch, type_kd_loss='FGFI'):
+def cal_kd_loss(student_features, teacher_features, batch, type_kd_loss='FGFI', teacher = None, student_preds = None, teacher_preds = None):
+    type_kd_loss = type_kd_loss.upper()
     # print(type_kd_loss)
-    if type_kd_loss.upper() == 'FGFI':
-        criterion = FGFI().to(teacher_preds[0].device)
-    elif type_kd_loss.upper() == 'MSE':
-        criterion = MSELoss().to(teacher_preds[0].device)
-    elif type_kd_loss.upper() == 'DSSIM':
-        criterion = DSSIMLoss().to(teacher_preds[0].device)
-    elif type_kd_loss.upper() == 'BOXGAUSS':
-        criterion = BoxGauss().to(teacher_preds[0].device)
+    if type_kd_loss == 'FGFI':
+        criterion = FGFI().to(teacher_features[0].device)
+    elif type_kd_loss == 'MSE':
+        criterion = MSELoss().to(teacher_features[0].device)
+    elif type_kd_loss == 'DSSIM':
+        criterion = DSSIMLoss().to(teacher_features[0].device)
+    elif type_kd_loss == 'BOXGAUSS':
+        criterion = BoxGauss().to(teacher_features[0].device)
+    elif type_kd_loss == 'RMPG':
+        criterion = RMPG(teacher, student_preds, teacher_preds).to(teacher_features[0].device)
+    elif type_kd_loss == 'LD':
+        criterion = LDLoss(teacher, student_preds, teacher_preds).to(teacher_features[0].device)
     else:
-        raise NameError("-----This loss is not available-------")
+        raise NameError(f"-----This {type_kd_loss} loss is not available-------")
     t = type(criterion)
     if t in (MSELoss, DSSIMLoss):
-        loss = criterion(student_preds, teacher_preds)
+        loss = criterion(student_features, teacher_features)
     else:
-        loss = criterion(student_preds, teacher_preds, batch)
+        loss = criterion(student_features, teacher_features, batch)
     # print(f'--------------{type(loss)}---------------')
     return loss
 
 def _do_train_v2(self: BaseTrainer, world_size=1):
-        """Train completed, evaluate and plot if specified by arguments."""
-        if world_size > 1:
-            self._setup_ddp(world_size)
+    """Train completed, evaluate and plot if specified by arguments."""
+    if world_size > 1:
+        self._setup_ddp(world_size)
 
-        self._setup_train(world_size)
-        self.epoch_time = None
-        self.epoch_time_start = time.time()
-        self.train_time_start = time.time()
-        nb = len(self.train_loader)  # number of batches
-        nw = max(round(self.args.warmup_epochs * nb), 100)  # number of warmup iterations
-        last_opt_step = -1
-        # self.run_callbacks('on_train_start')
-        LOGGER.info(f'Image sizes {self.args.imgsz} train, {self.args.imgsz} val\n'
-                    f'Using {self.train_loader.num_workers * (world_size or 1)} dataloader workers\n'
-                    f"Logging results to {colorstr('bold', self.save_dir)}\n"
-                    f'Starting training for {self.epochs} epochs...')
-        if self.args.close_mosaic:
-            base_idx = (self.epochs - self.args.close_mosaic) * nb
-            self.plot_idx.extend([base_idx, base_idx + 1, base_idx + 2])
+    self._setup_train(world_size)
+    self.epoch_time = None
+    self.epoch_time_start = time.time()
+    self.train_time_start = time.time()
+    nb = len(self.train_loader)  # number of batches
+    nw = max(round(self.args.warmup_epochs * nb), 100)  # number of warmup iterations
+    last_opt_step = -1
+    # self.run_callbacks('on_train_start')
+    LOGGER.info(f'Image sizes {self.args.imgsz} train, {self.args.imgsz} val\n'
+                f'Using {self.train_loader.num_workers * (world_size or 1)} dataloader workers\n'
+                f"Logging results to {colorstr('bold', self.save_dir)}\n"
+                f'Starting training for {self.epochs} epochs...')
+    if self.args.close_mosaic:
+        base_idx = (self.epochs - self.args.close_mosaic) * nb
+        self.plot_idx.extend([base_idx, base_idx + 1, base_idx + 2])
 
 
-        # create imitation mask for knowledge distillation
-        stu_mask_ids = self.args.student_kd_layer
-        tea_mask_ids = self.args.teacher_kd_layer
-        if hasattr(self, 'teacher'):
-            self.type_kd_loss = self.args.type_kd_loss # -----------------get type kd loss-----------------
-            self.teacher.train() 
-            dump_image = torch.zeros((1, 3, self.args.imgsz, self.args.imgsz), device=self.device)
+    # create imitation mask for knowledge distillation
+    stu_mask_ids = self.args.student_kd_layer
+    tea_mask_ids = self.args.teacher_kd_layer
+    if hasattr(self, 'teacher'):
+        self.type_kd_loss = self.args.type_kd_loss # -----------------get type kd loss-----------------
+        self.teacher.train() 
+        dump_image = torch.zeros((1, 3, self.args.imgsz, self.args.imgsz), device=self.device)
 
-            _, features = self.model(dump_image, mask_id = stu_mask_ids)  # forward
-            _, teacher_feature= self.teacher(dump_image, mask_id = tea_mask_ids) 
+        _, features = self.model(dump_image, mask_id = stu_mask_ids)  # forward
+        _, teacher_feature= self.teacher(dump_image, mask_id = tea_mask_ids) 
 
-            for i in range(len(features)):
-                _, student_channel, student_out_size, _ = features[i].shape
-                _, teacher_channel, teacher_out_size, _ = teacher_feature[i].shape
-                # print(f'--------{student_channel}--------{teacher_channel}--------------')
-        for epoch in range(self.start_epoch, self.epochs):
-            self.epoch = epoch
-            self.run_callbacks('on_train_epoch_start')
-            self.model.train()
+    self.alpha_kd = 1.0 # default 2.0
+    self.kd_decay = ExponentialDecayVariable(initial_value=self.alpha_kd, decay_rate = 0.1, min_value=0.0)
+    for epoch in range(0, self.start_epoch): # get the decay if resume training
+        self.kd_decay.step()
+        
+    for epoch in range(self.start_epoch, self.epochs):
+        self.epoch = epoch
+        self.run_callbacks('on_train_epoch_start')
+        self.model.train()
+        self.kd_decay.step() # update decay for kd rate
 
-            if RANK != -1:
-                self.train_loader.sampler.set_epoch(epoch)
-            pbar = enumerate(self.train_loader)
-            # Update dataloader attributes (optional)
-            if epoch == (self.epochs - self.args.close_mosaic):
-                LOGGER.info('Closing dataloader mosaic')
-                if hasattr(self.train_loader.dataset, 'mosaic'):
-                    self.train_loader.dataset.mosaic = False
-                if hasattr(self.train_loader.dataset, 'close_mosaic'):
-                    self.train_loader.dataset.close_mosaic(hyp=self.args)
-            if RANK in (-1, 0):
-                LOGGER.info(self.progress_string())
-                pbar = tqdm(enumerate(self.train_loader), total=nb, bar_format=TQDM_BAR_FORMAT)
-            self.tloss = None
-            self.t_kdloss = 0 # mean of kd loss
+        if RANK != -1:
+            self.train_loader.sampler.set_epoch(epoch)
+        pbar = enumerate(self.train_loader)
+        # Update dataloader attributes (optional)
+        if epoch == (self.epochs - self.args.close_mosaic):
+            LOGGER.info('Closing dataloader mosaic')
+            if hasattr(self.train_loader.dataset, 'mosaic'):
+                self.train_loader.dataset.mosaic = False
+            if hasattr(self.train_loader.dataset, 'close_mosaic'):
+                self.train_loader.dataset.close_mosaic(hyp=self.args)
+        if RANK in (-1, 0):
+            LOGGER.info(self.progress_string())
+            pbar = tqdm(enumerate(self.train_loader), total=nb, bar_format=TQDM_BAR_FORMAT)
+        self.tloss = None
+        self.t_kdloss = 0 # mean of kd loss
 
-            #----------------mean feat-----------------
-            self.stu_mean = []
-            self.tea_mean = []
-            for id in stu_mask_ids:
-                self.stu_mean.append({id: 0})
-            for id in tea_mask_ids:
-                self.tea_mean.append({id: 0})
-            #------------------------------------------------
+        #----------------mean feat-----------------
+        self.stu_mean = []
+        self.tea_mean = []
+        for id in stu_mask_ids:
+            self.stu_mean.append({id: 0})
+        for id in tea_mask_ids:
+            self.tea_mean.append({id: 0})
+        #------------------------------------------------
 
-            self.optimizer.zero_grad()
-            for i, batch in pbar:
-                self.run_callbacks('on_train_batch_start')
-                # Warmup
-                ni = i + nb * epoch
-                if ni <= nw:
-                    xi = [0, nw]  # x interp
-                    self.accumulate = max(1, np.interp(ni, xi, [1, self.args.nbs / self.batch_size]).round())
-                    for j, x in enumerate(self.optimizer.param_groups):
-                        # Bias lr falls from 0.1 to lr0, all other lrs rise from 0.0 to lr0
-                        x['lr'] = np.interp(
-                            ni, xi, [self.args.warmup_bias_lr if j == 0 else 0.0, x.get('initial_lr', self.args.lr0) * self.lf(epoch)])
-                        if 'momentum' in x:
-                            x['momentum'] = np.interp(ni, xi, [self.args.warmup_momentum, self.args.momentum])
+        self.optimizer.zero_grad()
+        for i, batch in pbar:
+            self.run_callbacks('on_train_batch_start')
+            # Warmup
+            ni = i + nb * epoch
+            if ni <= nw:
+                xi = [0, nw]  # x interp
+                self.accumulate = max(1, np.interp(ni, xi, [1, self.args.nbs / self.batch_size]).round())
+                for j, x in enumerate(self.optimizer.param_groups):
+                    # Bias lr falls from 0.1 to lr0, all other lrs rise from 0.0 to lr0
+                    x['lr'] = np.interp(
+                        ni, xi, [self.args.warmup_bias_lr if j == 0 else 0.0, x.get('initial_lr', self.args.lr0) * self.lf(epoch)])
+                    if 'momentum' in x:
+                        x['momentum'] = np.interp(ni, xi, [self.args.warmup_momentum, self.args.momentum])
 
-                # Forward
-                with torch.cuda.amp.autocast(self.amp):
-                    batch = self.preprocess_batch(batch)
-                    self.kd_loss = 0.0 # make a kd_loss
+            # Forward
+            with torch.cuda.amp.autocast(self.amp):
+                batch = self.preprocess_batch(batch)
+                self.kd_loss = 0.0 # make a kd_loss
 
-                    if hasattr(self, 'teacher'):
-                        preds, features =  self.model(batch['img'], mask_id = stu_mask_ids)
-                        teacher_preds, teacher_features =  self.teacher(batch['img'], mask_id = tea_mask_ids)
-                    else:
-                        preds = self.model(batch['img']) # predict
+                if hasattr(self, 'teacher'):
+                    preds, features =  self.model(batch['img'], mask_id = stu_mask_ids)
+                    teacher_preds, teacher_features =  self.teacher(batch['img'], mask_id = tea_mask_ids)
+                else:
+                    preds = self.model(batch['img']) # predict
 
-                    self.loss, self.loss_items = self.criterion(preds, batch) # cal loss
+                self.loss, self.loss_items = self.criterion(preds, batch) # cal loss
 
-                    if hasattr(self, 'teacher'):
-                        stu_feature_maps = []
-                        for i in range(len(features)):
-                            # print(f'-------------{stu_feature_adapts[i]}')
-                            stu_feature_maps.append(features[i])
-                        self.kd_loss = cal_kd_loss(stu_feature_maps, 
-                                                [f.detach() for f in teacher_features], batch=batch, type_kd_loss = self.type_kd_loss)
-                        
-                        #--------------------------------------------------------
-                        with torch.no_grad():
-                            for j in range(len(stu_mask_ids)):
-                                self.stu_mean[j][stu_mask_ids[j]] = (self.stu_mean[j][stu_mask_ids[j]] * i + torch.mean(stu_feature_maps[j])) / (i+1)
-                            for j in range(len(tea_mask_ids)):
-                                self.tea_mean[j][tea_mask_ids[j]] = (self.tea_mean[j][tea_mask_ids[j]] * i + torch.mean(teacher_features[j])) / (i+1)
-                        
-                        #-----------------------------------------------------------
+                if hasattr(self, 'teacher'):
+                    stu_feature_maps = []
+                    for i in range(len(features)):
+                        # print(f'-------------{stu_feature_adapts[i]}')
+                        stu_feature_maps.append(features[i])
+                    self.kd_loss = cal_kd_loss(stu_feature_maps, 
+                                            [f.detach() for f in teacher_features], 
+                                            batch=batch, type_kd_loss = self.type_kd_loss, 
+                                            teacher = self.teacher, student_preds = preds, teacher_preds = teacher_preds)
                     
-                    if RANK != -1:
-                        self.loss *= world_size
-                        if hasattr(self, 'teacher'):
-                            self.kd_loss *= world_size
-
-                    #-------------------------------------------------------
-                    self.t_kdloss = (self.t_kdloss * i + self.kd_loss) / (i + 1)
+                    #--------------------------------------------------------
+                    with torch.no_grad():
+                        for j in range(len(stu_mask_ids)):
+                            self.stu_mean[j][stu_mask_ids[j]] = (self.stu_mean[j][stu_mask_ids[j]] * i + torch.mean(stu_feature_maps[j])) / (i+1)
+                        for j in range(len(tea_mask_ids)):
+                            self.tea_mean[j][tea_mask_ids[j]] = (self.tea_mean[j][tea_mask_ids[j]] * i + torch.mean(teacher_features[j])) / (i+1)
                     
-                    self.tloss = (self.tloss * i + self.loss_items) / (i + 1) if self.tloss is not None \
-                        else self.loss_items
+                    #-----------------------------------------------------------
+                
+                if RANK != -1:
+                    self.loss *= world_size
+                    if hasattr(self, 'teacher'):
+                        self.kd_loss *= world_size
 
-                # Backward
-                self.alpha_kd = 0.1 # default 2.0
-                self.scaler.scale(self.loss + self.alpha_kd * self.kd_loss).backward()
+                #-------------------------------------------------------
+                self.t_kdloss = (self.t_kdloss * i + self.kd_loss) / (i + 1)
+                
+                self.tloss = (self.tloss * i + self.loss_items) / (i + 1) if self.tloss is not None \
+                    else self.loss_items
 
-                # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
-                if ni - last_opt_step >= self.accumulate:
-                    self.optimizer_step()
-                    last_opt_step = ni
+            # Backward
+            self.scaler.scale(self.loss + self.kd_decay.value * self.kd_loss).backward()
 
-                # Log
-                mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
-                loss_len = self.tloss.shape[0] if len(self.tloss.size()) else 1
-                losses = self.tloss if loss_len > 1 else torch.unsqueeze(self.tloss, 0)
-                if RANK in (-1, 0):
-                    # + '\n' + '%15.5g' * (1 + len(mask_id)*2)
-                    # , self.kd_loss
-                    pbar.set_description(
-                        ('%11s' * 2 + '%11.4g' * (2 + loss_len) + '%11.4g') % 
-                        (f'{epoch + 1}/{self.epochs}', mem, *losses, batch['cls'].shape[0], batch['img'].shape[-1], self.t_kdloss))
-                    self.run_callbacks('on_batch_end')
-                    if self.args.plots and ni in self.plot_idx:
-                        self.plot_training_samples(batch, ni)
+            # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
+            if ni - last_opt_step >= self.accumulate:
+                self.optimizer_step()
+                last_opt_step = ni
 
-                self.run_callbacks('on_train_batch_end')
-
-            self.lr = {f'lr/pg{ir}': x['lr'] for ir, x in enumerate(self.optimizer.param_groups)}  # for loggers
-
-            self.scheduler.step()
-            self.run_callbacks('on_train_epoch_end')
-
+            # Log
+            mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
+            loss_len = self.tloss.shape[0] if len(self.tloss.size()) else 1
+            losses = self.tloss if loss_len > 1 else torch.unsqueeze(self.tloss, 0)
             if RANK in (-1, 0):
+                # + '\n' + '%15.5g' * (1 + len(mask_id)*2)
+                # , self.kd_loss
+                pbar.set_description(
+                    ('%11s' * 2 + '%11.4g' * (2 + loss_len) + '%11.4g') % 
+                    (f'{epoch + 1}/{self.epochs}', mem, *losses, batch['cls'].shape[0], batch['img'].shape[-1], self.t_kdloss))
+                self.run_callbacks('on_batch_end')
+                if self.args.plots and ni in self.plot_idx:
+                    self.plot_training_samples(batch, ni)
 
-                # Validation
-                self.ema.update_attr(self.model, include=['yaml', 'nc', 'args', 'names', 'stride', 'class_weights'])
-                final_epoch = (epoch + 1 == self.epochs) or self.stopper.possible_stop
+            self.run_callbacks('on_train_batch_end')
 
-                if self.args.val or final_epoch:
-                    self.metrics, self.fitness = self.validate()
-                self.save_metrics(metrics={**self.label_loss_items(self.tloss), **self.metrics, **self.lr})
-                self.stop = self.stopper(epoch + 1, self.fitness)
+        self.lr = {f'lr/pg{ir}': x['lr'] for ir, x in enumerate(self.optimizer.param_groups)}  # for loggers
 
-                # Save model
-                if self.args.save or (epoch + 1 == self.epochs):
-                    self.save_model()
-                    self.run_callbacks('on_model_save')
-
-            tnow = time.time()
-            self.epoch_time = tnow - self.epoch_time_start
-            self.epoch_time_start = tnow
-            self.run_callbacks('on_fit_epoch_end')
-            torch.cuda.empty_cache()  # clears GPU vRAM at end of epoch, can help with out of memory errors
-
-            # Early Stopping
-            if RANK != -1:  # if DDP training
-                broadcast_list = [self.stop if RANK == 0 else None]
-                dist.broadcast_object_list(broadcast_list, 0)  # broadcast 'stop' to all ranks
-                if RANK != 0:
-                    self.stop = broadcast_list[0]
-            if self.stop:
-                break  # must break all DDP ranks
+        self.scheduler.step()
+        self.run_callbacks('on_train_epoch_end')
 
         if RANK in (-1, 0):
-            # Do final val with best.pt
-            LOGGER.info(f'\n{epoch - self.start_epoch + 1} epochs completed in '
-                        f'{(time.time() - self.train_time_start) / 3600:.3f} hours.')
-            self.final_eval()
-            if self.args.plots:
-                self.plot_metrics()
-            self.run_callbacks('on_train_end')
-        torch.cuda.empty_cache()
-        self.run_callbacks('teardown')
+
+            # Validation
+            self.ema.update_attr(self.model, include=['yaml', 'nc', 'args', 'names', 'stride', 'class_weights'])
+            final_epoch = (epoch + 1 == self.epochs) or self.stopper.possible_stop
+
+            if self.args.val or final_epoch:
+                self.metrics, self.fitness = self.validate()
+            self.save_metrics(metrics={**self.label_loss_items(self.tloss), **self.metrics, **self.lr})
+            self.stop = self.stopper(epoch + 1, self.fitness)
+
+            # Save model
+            if self.args.save or (epoch + 1 == self.epochs):
+                self.save_model()
+                self.run_callbacks('on_model_save')
+
+        tnow = time.time()
+        self.epoch_time = tnow - self.epoch_time_start
+        self.epoch_time_start = tnow
+        self.run_callbacks('on_fit_epoch_end')
+        torch.cuda.empty_cache()  # clears GPU vRAM at end of epoch, can help with out of memory errors
+
+        # Early Stopping
+        if RANK != -1:  # if DDP training
+            broadcast_list = [self.stop if RANK == 0 else None]
+            dist.broadcast_object_list(broadcast_list, 0)  # broadcast 'stop' to all ranks
+            if RANK != 0:
+                self.stop = broadcast_list[0]
+        if self.stop:
+            break  # must break all DDP ranks
+
+    if RANK in (-1, 0):
+        # Do final val with best.pt
+        LOGGER.info(f'\n{epoch - self.start_epoch + 1} epochs completed in '
+                    f'{(time.time() - self.train_time_start) / 3600:.3f} hours.')
+        self.final_eval()
+        if self.args.plots:
+            self.plot_metrics()
+        self.run_callbacks('on_train_end')
+    torch.cuda.empty_cache()
+    self.run_callbacks('teardown')
 
 def trainer_train_v2(self: BaseTrainer):
     """Allow device='', device=None on Multi-GPU systems to default to device=0."""
@@ -327,7 +337,7 @@ if __name__ == "__main__":
     parser.add_argument('--model', default='yolov8m.yaml', help='Pretrained pruning target model file')
     parser.add_argument('--teacher', help='teacher model')
     parser.add_argument('--teacher_kd_layer', nargs='*', type=int, default=[15, 18, 21], help="id of teacher layers for KD")
-    parser.add_argument('--student_kd_layer', nargs='*', type=int, default=[22, 23, 24], help="id of student layers for KD")
+    parser.add_argument('--student_kd_layer', nargs='*', type=int, default=[15, 18, 21], help="id of student layers for KD")
     parser.add_argument('--type_kd_loss', default='dssim', help='type of kd loss for feature maps')
 
     parser.add_argument('--batch', default=4, type=int, help='batch_size')
