@@ -194,8 +194,8 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                 # + '\n' + '%15.5g' * (1 + len(mask_id)*2)
                 # , self.kd_loss
                 pbar.set_description(
-                    ('%11s' * 2 + '%11.4g' * (2 + loss_len) + '%11.4g') % 
-                    (f'{epoch + 1}/{self.epochs}', mem, *losses, batch['cls'].shape[0], batch['img'].shape[-1], self.t_kdloss))
+                    ('%11s' * 2 + '%11.4g' * (4 + loss_len) ) % 
+                    (f'{epoch + 1}/{self.epochs}', mem, *losses, batch['cls'].shape[0], batch['img'].shape[-1], self.t_kdloss, self.kd_decay.value))
                 self.run_callbacks('on_batch_end')
                 if self.args.plots and ni in self.plot_idx:
                     self.plot_training_samples(batch, ni)
@@ -278,8 +278,8 @@ def trainer_train_v2(self: BaseTrainer):
 def progress_string_v2(self: BaseTrainer):
     """Returns a formatted string of training progress with epoch, GPU memory, loss, instances and size."""
     return ('\n' + '%11s' *
-            (4 + len(self.loss_names))  + '%11s') % \
-            ('Epoch', 'GPU_mem', *self.loss_names, 'Instances', 'Size', 'KD_loss')
+            (4 + len(self.loss_names))  + '%11s'*2) % \
+            ('Epoch', 'GPU_mem', *self.loss_names, 'Instances', 'Size', 'KD_loss', 'KD_decay')
 
 def train_v2(self: YOLO,  **kwargs):
     """
