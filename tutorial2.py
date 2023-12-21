@@ -43,5 +43,5 @@ if __name__ == '__main__':
 # python yolov8_KD/KD_training_ver7.py --model KD_feature/train15/weights/last.pt --teacher yolov8m_coco10k.pt --type_kd_loss FGFI --resume True --device 1 # KD_feat 15
 
 # KD_v8s LD loss
-# python yolov8_KD/KD_training_ver7.py --model yolov8s.yaml --teacher yolov8m_coco10k.pt --data coco_minitrain_10k.yaml --type_kd_loss LD --epochs 500 --batch 16 --device 1 # KD_feat 16
-# python yolov8_KD/KD_training_ver7.py --model KD_feature/train16/weights/last.pt --teacher yolov8m_coco10k.pt --type_kd_loss LD --resume True --device 1 # KD_feat 16
+# python yolov8_KD/KD_training_ver7.py --model yolov8s.yaml --teacher yolov8m_coco10k.pt --data coco_minitrain_10k.yaml --type_kd_loss LD --epochs 500 --batch 16 --device 0 # KD_feat 16
+# python yolov8_KD/KD_training_ver7.py --model KD_feature/train16/weights/last.pt --teacher yolov8m_coco10k.pt --type_kd_loss LD --resume True --device 0 # KD_feat 16

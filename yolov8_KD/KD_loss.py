@@ -62,7 +62,7 @@ class KLDLoss(nn.Module):
 
     def forward(self, y_pred, y_true):
         # epsilon = 1e-7
-        loss = - torch.where(y_true != 0, y_true * (y_pred / y_true).log(), torch.tensor(0.0))
+        loss = - torch.where(y_true != 0, y_true * (y_pred / y_true).log(), 0)
         num_dims = y_pred.dim()
         # keep_dims = tuple(range(1, num_dims))
         return loss.sum(dim = num_dims-1).mean()
