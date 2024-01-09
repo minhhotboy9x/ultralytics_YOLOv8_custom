@@ -78,11 +78,11 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
     tea_mask_ids = self.args.teacher_kd_layer
     if hasattr(self, 'teacher'):
         self.type_kd_loss = self.args.type_kd_loss # -----------------get type kd loss-----------------
-        self.teacher.train() 
+        self.teacher.eval() 
         dump_image = torch.zeros((1, 3, self.args.imgsz, self.args.imgsz), device=self.device)
 
         _, features = self.model(dump_image, mask_id = stu_mask_ids)  # forward
-        _, teacher_feature= self.teacher(dump_image, mask_id = tea_mask_ids) 
+        _, teacher_feature = self.teacher(dump_image, mask_id = tea_mask_ids)[1]
 
     self.alpha_kd = 1.0 # default 2.0
     self.kd_decay = ExponentialDecayVariable(initial_value=self.alpha_kd, decay_rate = 0.1, min_value=0.0)
@@ -194,7 +194,7 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                 # + '\n' + '%15.5g' * (1 + len(mask_id)*2)
                 # , self.kd_loss
                 pbar.set_description(
-                    ('%11s' * 2 + '%11.4g' * (4 + loss_len) ) % 
+                    ('%11s' * 2 + '%11.4g' * (4 + loss_len)) % 
                     (f'{epoch + 1}/{self.epochs}', mem, *losses, batch['cls'].shape[0], batch['img'].shape[-1], self.t_kdloss, self.kd_decay.value))
                 self.run_callbacks('on_batch_end')
                 if self.args.plots and ni in self.plot_idx:

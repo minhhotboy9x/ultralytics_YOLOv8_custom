@@ -110,18 +110,19 @@ class RMPG(nn.Module):
         return 1.5*L_imi + 4.0*L_head
 
 class LDLoss(nn.Module):
-    def __init__(self, teacher, student_preds, teacher_preds) -> None:
+    def __init__(self, teacher, student_preds, teacher_preds, alpha = 0.3) -> None:
         super(LDLoss, self).__init__()
         self.device = next(teacher.parameters()).device
         self.teacher = teacher
         self.getkey = GetKeyRegion(teacher, topk=10)
         self.tea_preds = teacher_preds
         self.stu_preds = student_preds
+        self.alpha = alpha
 
-    def head_loss(self, stu_distri, tea_distri, stu_pred_scores, tea_pred_scores, Ms, T=1.0):
-        ba, c = tea_distri[Ms].shape  # chosen batch and anchors, channels
-        tea_distri_chosen = (tea_distri[Ms]/T).view(ba, 4, c // 4).softmax(2)
-        stu_distri_chosen = (stu_distri[Ms]/T).view(ba, 4, c // 4).softmax(2)
+    def head_loss(self, stu_distri, tea_distri, stu_pred_scores, tea_pred_scores, Ft, T=1.0):
+        ba, c = tea_distri[Ft].shape  # chosen batch and anchors, channels
+        tea_distri_chosen = (tea_distri[Ft]/T).view(ba, 4, c // 4).softmax(2)
+        stu_distri_chosen = (stu_distri[Ft]/T).view(ba, 4, c // 4).softmax(2)
         kl_loss = KLD()
         box_loss = kl_loss(stu_distri_chosen, tea_distri_chosen)
         return box_loss
@@ -132,9 +133,9 @@ class LDLoss(nn.Module):
         stu_candidate_iou, _, stu_target_gt_idx, _, _, stu_pred_scores, stu_distri = self.getkey(self.stu_preds, batch)
         
         # get the beneficial anchors
-        Ms = (tea_candidate_iou >= stu_candidate_iou) * (tea_target_gt_idx == stu_target_gt_idx) * Ms
+        Ft = (tea_candidate_iou >= stu_candidate_iou + self.alpha) * (tea_target_gt_idx == stu_target_gt_idx) * Ms
 
-        loss = self.head_loss(stu_distri, tea_distri, stu_pred_scores, tea_pred_scores, Ms, T=1.0)
+        loss = self.head_loss(stu_distri, tea_distri, stu_pred_scores, tea_pred_scores, Ft, T=1.0)
         # print(f'kd loss {loss}')
         return loss
     

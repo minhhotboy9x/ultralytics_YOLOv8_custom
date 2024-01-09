@@ -403,10 +403,10 @@ def prune(args):
 
         save_pruning_performance_graph(nparams_list, map_list, macs_list, pruned_map_list, 
                                        dir = os.path.join(pruning_cfg["project"], prefix_folder) )
-
         if init_map - current_map > args.max_map_drop:
             print("Pruning early stop")
             break
+
     model.export(format='onnx')
     model.export(format='torchscript')
 
@@ -418,7 +418,7 @@ if __name__ == "__main__":
                              ' This file should have same format with ultralytics/yolo/cfg/default.yaml')
     parser.add_argument('--iterative-steps', default=16, type=int, help='Total pruning iteration step')
     parser.add_argument('--target-prune-rate', default=0.5, type=float, help='Target pruning rate')
-    parser.add_argument('--max-map-drop', default=0.2, type=float, help='Allowed maximum map drop after fine-tuning')
+    parser.add_argument('--max-map-drop', default=0.04, type=float, help='Allowed maximum map drop after fine-tuning')
 
     parser.add_argument('--batch', default=4, type=int, help='batch_size')
     parser.add_argument('--data', default='coco128.yaml', help='dataset')
