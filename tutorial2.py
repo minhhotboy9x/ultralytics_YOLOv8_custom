@@ -2,30 +2,50 @@ import torch
 import torch.nn as nn
 from ultralytics import YOLO
 from ultralytics.yolo.utils import yaml_load, LOGGER, RANK
+import onnx
+from thop import profile
+from ultralytics.nn.modules import Detect, C2f, Conv, Bottleneck
+import onnxruntime
+import time
+    
+# model = YOLO('yolov8s.yaml') 
+# model = YOLO('yolov8m.pt')
+# model = YOLO('/home/minhnq/ultralytics/pruning/train5/step_4_finetune/weights/best.pt')
+# model = YOLO('asset/trained_model/UA-DETRAC/v8n_UA_DETRAC.pt')
+# model = YOLO('yolov8m.yaml')
+# model = YOLO('runs/detect/train8/weights/best.pt') 
+model = YOLO("asset/trained_model/UA-DETRAC/v8n_UA_DETRAC_T-head.pt")
 
-# model = YOLO('yolov8s.pt') 
-# model = YOLO('yolov8n.yaml')
-# model = YOLO('yolov8s.yaml')
-model = YOLO('/home/minhnq/ultralytics/asset/trained_model/UA-DETRAC/v8s_UA_DETRAC.pt') 
 
 if __name__ == '__main__':
-    # model.train(data = 'UA-DETRAC.yaml', epochs = 500, batch=32, device = 0) # run 9 (ReLu)
-    # model.train(data = 'UA-DETRAC.yaml', resume=True, batch=16, device = 0, workers=4)
-    metrics = model.val(data = 'UA-DETRAC.yaml', device = 0) # run 0
+    # model.train(data = 'coco_minitrain_10k.yaml', epochs = 500, batch=16, device = 0, project='quantize_training') # quantize_training 0
+    # model.train(data = 'coco128.yaml', epochs = 5, device = 0) 
+    # print(model.model)
+    
+    # model.train(data = 'UA-DETRAC.yaml', epochs = 500, batch=16, device = 0) # run 15 detect
+    # model.info()
+    # metrics = model.val(data = 'UA-DETRAC.yaml', batch=4, device='cpu') 
+    # metrics = model.val(data = 'UA-DETRAC.yaml', batch=16) 
+    # model.train(data = 'coco128.yaml', epochs=5, project='coco_128')
+
+    input_tensor = torch.randn(100, 3, 640, 640)
+    t_time = 0
+    for i in range(100):
+    # Suy luận trên dữ liệu
+        start_time = time.time()
+        output = model.model(input_tensor[i:i+1])
+        end_time = time.time()
+        t_time += end_time - start_time
+    print(t_time/100 * 1000)
     # print(model.model.model)
-    print(metrics)
+    # print(metrics)
+    # flops, params = profile(model.model, inputs=torch.randn(1, 1, 3, 640, 640))
+    # print(f"FLOPs: {flops}, Params: {params}")
+    # print(model)
+    # model.info(verbose=True)
+
+
 # train 10k thuong
-
-# KD_v8s feat_adapt m dssim
-# python yolov8_KD/KD_training_ver7.py --model yolov8s.yaml --teacher yolov8m_coco10k.pt --data coco_minitrain_10k.yaml --type_kd_loss dssim --epochs 500 --batch 16 --device 0 # KD_feat 10
-# python yolov8_KD/KD_training_ver7.py --model KD_feature/train10/weights/last.pt --teacher yolov8m_coco10k.pt --typưe_kd_loss dssim --resume True --device 1 # KD_feat 10
-
-# KD
-# python yolov8_KD/KD_training_ver3.py --model yolov8s.yaml --teacher yolov8m.pt --type_kd_loss dssim --data coco_minitrain_10k.yaml --epochs 500 --batch 16 --device 0 # KD_feat_out 2
-# python yolov8_KD/KD_training_ver3.py --model KD_feature_out/train2/weights/last.pt --teacher yolov8m.pt --type_kd_loss dssim --resume True --device 0 # KD_feat_out 2
-
-# python yolov8_KD/KD_training.py --model yolov8s.pt --teacher yolov8m.pt --project coco_kd  --data coco.yaml --epochs 300 --batch 32 --device 1 --worker 4 # coco_kd 1
-# benchmarks/prunability/yolov8_pruning.py --model asset/trained_model/UA-DETRAC/v8s_UA_DETRAC.pt --data UA-DETRAC.yaml --epochs 50 --batch 16 --device 0
 # test
 # python yolov8_KD/KD_training_ver7.py --model yolov8s.yaml --teacher yolov8m.pt --project coco_128 --type_kd_loss LD --data coco128.yaml --epochs 50 --batch 4 --device 0
 # python yolov8_KD/KD_training_ver7.py --model asset/trained_model/coco_mini_10k/v8s+sm_tea_v8m_coco10k_feat_FGFI_[22,23,24]_alpha=0.1.pt --teacher yolov8m.pt --project coco_128 --type_kd_loss fgd --data coco128.yaml --epochs 50 --batch 4 --device 1
@@ -42,8 +62,18 @@ if __name__ == '__main__':
 # python yolov8_KD/KD_training_ver7.py --model KD_feature/train15/weights/last.pt --teacher yolov8m_coco10k.pt --type_kd_loss FGFI --resume True --device 1 # KD_feat 15
 
 # KD_v8s LD loss
-# python yolov8_KD/KD_training_ver7.py --model yolov8s.yaml --teacher yolov8m_coco10k.pt --data coco_minitrain_10k.yaml --type_kd_loss LD --epochs 500 --batch 16 --device 0 # KD_feat 17
-# python yolov8_KD/KD_training_ver7.py --model KD_feature/train17/weights/last.pt --teacher yolov8m_coco10k.pt --type_kd_loss LD --resume True --device 0 # KD_feat 17
+# python yolov8_KD/KD_training_ver7.py --model yolov8s.yaml --teacher yolov8m_coco10k.pt --data coco_minitrain_10k.yaml --type_kd_loss LD --epochs 500 --batch 16 --device 0 # KD_feat 16
+# python yolov8_KD/KD_training_ver7.py --model KD_feature/train17/weights/last.pt --teacher yolov8m_coco10k.pt --type_kd_loss LD --resume True --device 0 # KD_feat 16
 
 # pruning 
-# python benchmarks/prunability/yolov8_pruning.py --model asset/trained_model/UA-DETRAC/v8s_UA_DETRAC.pt --data UA-DETRAC.yaml --epochs 50 --batch 16 --device 0
+# python benchmarks/prunability/yolov8_pruning.py --model asset/trained_model/UA-DETRAC/v8s_UA_DETRAC.pt --data UA-DETRAC.yaml --iterative-steps 5 --epochs 50 --target-prune-rate 0.3 --batch 16 --device 0
+
+# test
+# python benchmarks/prunability/yolov8_pruning.py --model yolov8s.pt --data coco128.yaml --iterative-steps 20 --epochs 2 --target-prune-rate 0.8 --batch 32 --max-map-drop 1.0 --device 0
+
+
+# test quantized model
+# python yolov8_QT/qat.py --model yolov8n.yaml --data coco128.yaml --epochs 3 --batch 4 --device 0
+    
+# quantize 
+# python yolov8_QT/ptq.py --model asset/trained_model/UA-DETRAC/v8n_UA_DETRAC.pt --data UA-DETRAC.yaml

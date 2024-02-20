@@ -86,7 +86,6 @@ class AutoBackend(nn.Module):
         cuda = torch.cuda.is_available() and device.type != 'cpu'  # use CUDA
         if not (pt or triton or nn_module):
             w = attempt_download_asset(w)  # download if not local
-
         # NOTE: special case: in-memory pytorch model
         if nn_module:
             model = weights.to(device) # type: DetectionModel
@@ -98,7 +97,6 @@ class AutoBackend(nn.Module):
             model.half() if fp16 else model.float()
             self.model = model  # explicitly assign for to(), cpu(), cuda(), half()
             pt = True
-
         elif pt:  # PyTorch
             from ultralytics.nn.tasks import attempt_load_weights
             model = attempt_load_weights(weights if isinstance(weights, list) else w,
@@ -266,7 +264,6 @@ class AutoBackend(nn.Module):
             raise TypeError(f"model='{w}' is not a supported model format. "
                             'See https://docs.ultralytics.com/modes/predict for help.'
                             f'\n\n{export_formats()}')
-
         # Load external metadata YAML
         if isinstance(metadata, (str, Path)) and Path(metadata).exists():
             metadata = yaml_load(metadata)
@@ -284,7 +281,6 @@ class AutoBackend(nn.Module):
             kpt_shape = metadata.get('kpt_shape')
         elif not (pt or triton or nn_module):
             LOGGER.warning(f"WARNING ⚠️ Metadata not found for 'model={weights}'")
-
         # Check names
         if 'names' not in locals():  # names missing
             names = self._apply_default_class_names(data)
@@ -391,9 +387,7 @@ class AutoBackend(nn.Module):
                 y[1] = np.transpose(y[1], (0, 3, 1, 2))  # should be y = (1, 116, 8400), (1, 32, 160, 160)
             y = [x if isinstance(x, np.ndarray) else x.numpy() for x in y]
             # y[0][..., :4] *= [w, h, w, h]  # xywh normalized to pixels
-
-        # for x in y:
-        #     print(type(x), len(x)) if isinstance(x, (list, tuple)) else print(type(x), x.shape)  # debug shapes
+            
         if isinstance(y, (list, tuple)):
             return self.from_numpy(y[0]) if len(y) == 1 else [self.from_numpy(x) for x in y]
         else:

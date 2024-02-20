@@ -9,8 +9,15 @@ import torch
 import torch.nn as nn
 
 from ultralytics.nn.modules import (C1, C2, C3, C3TR, SPP, SPPF, Bottleneck, BottleneckCSP, C2f, C3Ghost, C3x, Classify,
-                                    Concat, Conv, ConvTranspose, Detect, DWConv, DWConvTranspose2d, Ensemble, Focus,
+                                    Concat, Conv, ConvTranspose, Detect, DWConv, DWConvTranspose2d, Ensemble, Focus, TransformerBlock, 
                                     GhostBottleneck, GhostConv, Pose, Segment)
+
+from ultralytics.nn.modules_quantized import (Q_C1, Q_C2, Q_C3, Q_Conv, Q_BottleneckCSP, Q_Bottleneck, Q_ConvTranspose, Q_DWConv,
+                                              Q_DWConvTranspose2d, Q_TransformerBlock, Q_TransformerLayer, Q_C3x, Q_C3TR, Q_C2f,
+                                              Q_C3Ghost, Q_GhostConv, Q_GhostBottleneck, Q_SPP, Q_SPPF, Q_Focus)
+
+from ultralytics.nn.modules_deformable import (DeConv, DeDetect, TDetect)
+
 from ultralytics.yolo.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.yolo.utils.checks import check_requirements, check_suffix, check_yaml
 from ultralytics.yolo.utils.torch_utils import (fuse_conv_and_bn, fuse_deconv_and_bn, initialize_weights,
@@ -112,7 +119,6 @@ class BaseModel(nn.Module):
                     delattr(m, 'bn')  # remove batchnorm
                     m.forward = m.forward_fuse  # update forward
             self.info(verbose=verbose)
-
         return self
 
     def is_fused(self, thresh=10):
@@ -191,7 +197,7 @@ class  DetectionModel(BaseModel):
 
         # Build strides
         m = self.model[-1]  # Detect()
-        if isinstance(m, (Detect, Segment, Pose)):
+        if isinstance(m, (Detect, Segment, Pose, DeDetect, TDetect)):
             s = 256  # 2x min stride
             m.inplace = self.inplace
             forward = lambda x: self.forward(x)[0] if isinstance(m, (Segment, Pose)) else self.forward(x)
@@ -439,7 +445,7 @@ def attempt_load_one_weight(weight, device=None, inplace=True, fuse=False):
     # Module compatibility updates
     for m in model.modules():
         t = type(m)
-        if t in (nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU, Detect, Segment):
+        if t in (nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU, Detect, TDetect, Segment):
             m.inplace = inplace  # torch 1.7.0 compatibility
         elif t is nn.Upsample and not hasattr(m, 'recompute_scale_factor'):
             m.recompute_scale_factor = None  # torch 1.11.0 compatibility
@@ -453,7 +459,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
     import ast
     # Args
     max_channels = float('inf')
-    nc, act, scales = (d.get(x) for x in ('nc', 'act', 'scales'))
+    nc, act, scales, qconfig = (d.get(x) for x in ('nc', 'act', 'scales', 'qconfig'))
     depth, width, kpt_shape = (d.get(x, 1.0) for x in ('depth_multiple', 'width_multiple', 'kpt_shape'))
     if scales:
         scale = d.get('scale')
@@ -464,8 +470,18 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
 
     if act:
         Conv.default_act = eval(act)  # redefine default activation, i.e. Conv.default_act = nn.SiLU()
+        Q_Conv.default_act = eval(act)  # redefine default activation, i.e. Conv.default_act = nn.SiLU()
+        DeConv.default_act = eval(act)
         if verbose:
             LOGGER.info(f"{colorstr('activation:')} {act}")  # print
+
+    if qconfig:
+        Q_Conv.default_qconfig = qconfig
+        Q_DWConvTranspose2d.default_qconfig = qconfig
+        Q_ConvTranspose.default_qconfig = qconfig
+        Q_TransformerLayer.default_qconfig = qconfig
+        if verbose:
+            LOGGER.info(f"{colorstr('quantized config:')} {qconfig}")  # print
 
     if verbose:
         LOGGER.info(f"\n{'':>3}{'from':>20}{'n':>3}{'params':>10}  {'module':<45}{'arguments':<30}")
@@ -480,20 +496,23 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
 
         n = n_ = max(round(n * depth), 1) if n > 1 else n  # depth gain
         if m in (Classify, Conv, ConvTranspose, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, Focus,
-                 BottleneckCSP, C1, C2, C2f, C3, C3TR, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x):
+                 BottleneckCSP, C1, C2, C2f, C3, C3TR, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x, DeConv) \
+            or m in (Q_Conv, Q_ConvTranspose, Q_GhostConv, Q_Bottleneck, Q_GhostBottleneck, Q_SPP, Q_SPPF, Q_DWConv, Q_Focus,
+                 Q_BottleneckCSP, Q_C1, Q_C2, Q_C2f, Q_C3, Q_C3TR, Q_C3Ghost, Q_C3x, Q_DWConvTranspose2d):
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
                 c2 = make_divisible(min(c2, max_channels) * width, 8)
 
             args = [c1, c2, *args[1:]]
-            if m in (BottleneckCSP, C1, C2, C2f, C3, C3TR, C3Ghost, C3x):
+            if m in (BottleneckCSP, C1, C2, C2f, C3, C3TR, C3Ghost, C3x) or \
+                m in (Q_BottleneckCSP, Q_C1, Q_C2, Q_C2f, Q_C3, Q_C3TR, Q_C3Ghost, Q_C3x):
                 args.insert(2, n)  # number of repeats
                 n = 1
         elif m is nn.BatchNorm2d:
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
-        elif m in (Detect, Segment, Pose):
+        elif m in (Detect, Segment, Pose, DeDetect, TDetect):
             args.append([ch[x] for x in f])
             if m is Segment:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
@@ -511,6 +530,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
         if i == 0:
             ch = []
         ch.append(c2)
+        
     return nn.Sequential(*layers), sorted(save)
 
 
@@ -569,7 +589,7 @@ def guess_model_task(model):
         m = cfg['head'][-1][-2].lower()  # output module name
         if m in ('classify', 'classifier', 'cls', 'fc'):
             return 'classify'
-        if m == 'detect':
+        if m == 'detect' or m == 'dedetect' or m == 'tdetect':
             return 'detect'
         if m == 'segment':
             return 'segment'
@@ -591,7 +611,7 @@ def guess_model_task(model):
                 return cfg2task(eval(x))
 
         for m in model.modules():
-            if isinstance(m, Detect):
+            if isinstance(m, Detect) or isinstance(m, DeDetect) or isinstance(m, TDetect):
                 return 'detect'
             elif isinstance(m, Segment):
                 return 'segment'
@@ -609,7 +629,7 @@ def guess_model_task(model):
             return 'classify'
         elif '-pose' in model.stem or 'pose' in model.parts:
             return 'pose'
-        elif 'detect' in model.parts:
+        elif 'detect' in model.parts or 'dedetect' in model.parts or 'tdetect' in model.parts:
             return 'detect'
 
     # Unable to determine task from model

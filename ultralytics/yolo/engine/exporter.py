@@ -310,7 +310,6 @@ class Exporter:
                 dynamic['output1'] = {0: 'batch', 2: 'mask_height', 3: 'mask_width'}  # shape(1,32,160,160)
             elif isinstance(self.model, DetectionModel):
                 dynamic['output0'] = {0: 'batch', 1: 'anchors'}  # shape(1,25200,85)
-
         torch.onnx.export(
             self.model.cpu() if dynamic else self.model,  # --dynamic only compatible with cpu
             self.im.cpu() if dynamic else self.im,

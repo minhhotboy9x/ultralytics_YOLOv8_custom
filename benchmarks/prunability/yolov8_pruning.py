@@ -103,6 +103,41 @@ def save_pruning_performance_graph(x, y1, y2, y3, dir=""):
     plt.savefig(os.path.join(dir, f'pruning_perf_change.png'))
 
 
+def save_pruning_size_graph(x, y1, y2, dir=""): # sparities_list, no_params_list, flops_list
+    try:
+        plt.style.use("ggplot")
+    except:
+        pass
+
+    x, y1, y2= np.array(x), np.array(y1), np.array(y2)
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    # plot the pruned mAP and recovered mAP
+    ax.set_xlabel('Channel sparsity')
+    ax.set_ylabel('#Params (M)')
+    ax.plot(x, y1, label='Remaining #params')
+    ax.scatter(x, y1)
+
+    # create a second axis that shares the same x-axis
+    ax2 = ax.twinx()
+
+    # plot the second set of data
+    ax2.set_ylabel('FLOPs (G)')
+    ax2.plot(x, y2, color='tab:blue', label='Remaining FLOPs')
+    ax2.scatter(x, y2, color='tab:blue')
+
+    # add a legend
+    lines, labels = ax.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax2.legend(lines + lines2, labels + labels2, loc='best')
+
+    ax.set_xlim(1, 0)
+    ax.set_ylim(0, max(y1) + 1.5)
+    ax2.set_ylim(0, max(y2) + 1.5)
+
+    plt.title('Comparison of FLOPs and #Params with Pruning Ratio')
+    plt.savefig(os.path.join(dir, f'pruning_size_change.png'))
+
 def infer_shortcut(bottleneck):
     c1 = bottleneck.cv1.conv.in_channels
     c2 = bottleneck.cv2.conv.out_channels
@@ -310,6 +345,7 @@ def prune(args):
 
     example_inputs = torch.randn(1, 3, pruning_cfg["imgsz"], pruning_cfg["imgsz"]).to(model.device)
     macs_list, nparams_list, map_list, pruned_map_list = [], [], [], []
+    flops_list, no_params_list, sparities_list = [], [], []
     base_macs, base_nparams = tp.utils.count_ops_and_params(model.model, example_inputs)
 
     # do validation before pruning model
@@ -318,10 +354,15 @@ def prune(args):
     validation_model = deepcopy(model) #YOLO object
     metric = validation_model.val(**pruning_cfg)
     init_map = metric.box.map
+
     macs_list.append(base_macs)
     nparams_list.append(100)
     map_list.append(init_map)
     pruned_map_list.append(init_map)
+    flops_list.append(base_macs/1e9 *2)
+    no_params_list.append(base_nparams/1e6)
+    sparities_list.append(1.0)
+
     print(f"Before Pruning: MACs={base_macs / 1e9: .5f} G, #Params={base_nparams / 1e6: .5f} M, mAP={init_map: .5f}")
 
     # prune same ratio of filter based on initial size
@@ -342,7 +383,7 @@ def prune(args):
             => (1 - c)^n = (1 - p)
             => c = 1 - (1-p) ^ (1/n) (dpcm)
     '''
-    
+    print('-----------pruning ratio each step:', ch_sparsity)
     for i in range(args.iterative_steps):
 
         model.model.train()
@@ -397,12 +438,17 @@ def prune(args):
         nparams_list.append(pruned_nparams / base_nparams * 100)
         pruned_map_list.append(pruned_map)
         map_list.append(current_map)
-
+        flops_list.append(pruned_macs/1e9*2)
+        no_params_list.append(pruned_nparams/1e6)
+        sparities_list.append(sparities_list[-1] * (1-ch_sparsity))
         # remove pruner after single iteration
         del pruner
 
         save_pruning_performance_graph(nparams_list, map_list, macs_list, pruned_map_list, 
                                        dir = os.path.join(pruning_cfg["project"], prefix_folder) )
+        
+        save_pruning_size_graph(sparities_list, no_params_list, flops_list,
+                                dir = os.path.join(pruning_cfg["project"], prefix_folder))
         if init_map - current_map > args.max_map_drop:
             print("Pruning early stop")
             break

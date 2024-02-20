@@ -82,7 +82,7 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
         dump_image = torch.zeros((1, 3, self.args.imgsz, self.args.imgsz), device=self.device)
 
         _, features = self.model(dump_image, mask_id = stu_mask_ids)  # forward
-        _, teacher_feature = self.teacher(dump_image, mask_id = tea_mask_ids)[1]
+        (_, _), teacher_features =  self.teacher(dump_image, mask_id = tea_mask_ids)
 
     self.alpha_kd = 1.0 # default 2.0
     self.kd_decay = ExponentialDecayVariable(initial_value=self.alpha_kd, decay_rate = 0.1, min_value=0.0)
@@ -142,7 +142,7 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
 
                 if hasattr(self, 'teacher'):
                     preds, features =  self.model(batch['img'], mask_id = stu_mask_ids)
-                    teacher_preds, teacher_features =  self.teacher(batch['img'], mask_id = tea_mask_ids)
+                    (_, teacher_preds), teacher_features =  self.teacher(batch['img'], mask_id = tea_mask_ids)
                 else:
                     preds = self.model(batch['img']) # predict
 
