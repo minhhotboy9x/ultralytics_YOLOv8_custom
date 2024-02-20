@@ -30,9 +30,8 @@ class C2f_v2(nn.Module):
 # model = YOLO('asset/trained_model/UA-DETRAC/v8n_UA_DETRAC.pt')
 # model = YOLO('yolov8m.yaml')
 # model = YOLO('runs/detect/train8/weights/best.pt') 
-model = YOLO("asset/trained_model/UA-DETRAC/v8n_UA_DETRAC_T-head.pt")
-model.export()
-
+# model = YOLO("asset/trained_model/UA-DETRAC_torchscript/v8n_UA_DETRAC_default_ptq.torchscript")
+model = torch.jit.load("asset/trained_model/UA-DETRAC_torchscript/v8s_UA_DETRAC_localprune_0.5_iter5.torchscript", map_location=torch.device('cpu'))
 
 if __name__ == '__main__':
     # model.train(data = 'coco_minitrain_10k.yaml', epochs = 500, batch=16, device = 0, project='quantize_training') # quantize_training 0
@@ -45,16 +44,16 @@ if __name__ == '__main__':
     # metrics = model.val(data = 'UA-DETRAC.yaml', batch=16) 
     # model.train(data = 'coco128.yaml', epochs=5, project='coco_128')
 
-    # input_tensor = torch.randn(100, 3, 640, 640)
-    # t_time = 0
-    # for i in range(100):
-    # # Suy luận trên dữ liệu
-    #     start_time = time.time()
-    #     output = model.model(input_tensor[i:i+1])
-    #     end_time = time.time()
-    #     t_time += end_time - start_time
-    # print(t_time/100 * 1000)
-    pass
+    input_tensor = torch.randn(100, 3, 640, 640)
+    t_time = 0
+    for i in range(100):
+    # Suy luận trên dữ liệu
+        start_time = time.time()
+        output = model(input_tensor[i:i+1])
+        end_time = time.time()
+        t_time += end_time - start_time
+    print(t_time/100 * 1000)
+
     # print(model.model.model)
     # print(metrics)
     # flops, params = profile(model.model, inputs=torch.randn(1, 1, 3, 640, 640))
