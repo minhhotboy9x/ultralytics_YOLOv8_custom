@@ -59,7 +59,8 @@ from pathlib import Path
 import torch
 
 from ultralytics.nn.autobackend import check_class_names
-from ultralytics.nn.modules import C2f, Detect, Segment
+from ultralytics.nn.modules import C2f, Detect, Segment, C2f_v2
+from ultralytics.nn.modules_deformable import TDetect
 from ultralytics.nn.tasks import DetectionModel, SegmentationModel
 from ultralytics.yolo.cfg import get_cfg
 from ultralytics.yolo.utils import (DEFAULT_CFG, LINUX, LOGGER, MACOS, __version__, callbacks, colorstr,
@@ -184,7 +185,7 @@ class Exporter:
         model.float()
         model = model.fuse()
         for k, m in model.named_modules():
-            if isinstance(m, (Detect, Segment)):
+            if isinstance(m, (Detect, Segment, TDetect)):
                 m.dynamic = self.args.dynamic
                 m.export = True
                 m.format = self.args.format
