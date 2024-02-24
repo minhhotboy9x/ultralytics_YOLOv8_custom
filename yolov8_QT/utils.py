@@ -1,11 +1,12 @@
 import torch
 import torch.nn as nn
+import torch.quantization as quantization
 from ultralytics.nn.modules import Detect, C2f, Conv, Bottleneck, C2f_v2
 from ultralytics.nn.modules_quantized import Q_Conv
 from ultralytics.nn.modules_deformable import TDetect
-from ultralytics.yolo.utils import (yaml_load, LOGGER, RANK, DEFAULT_CFG_DICT, TQDM_BAR_FORMAT, 
-                            DEFAULT_CFG_KEYS, DEFAULT_CFG, callbacks, clean_url, colorstr, emojis, yaml_save)
+from ultralytics.yolo.utils import (DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS)
 from ultralytics.nn.tasks import torch_safe_load, guess_model_task
+from torch.ao.quantization.qconfig import QConfig
 
 def transfer_weights_qconv(conv, qconv):
     state_dict_conv = conv.state_dict()
@@ -19,27 +20,43 @@ def transfer_weights_qconv(conv, qconv):
             setattr(qconv, attr_name, attr_value)
     qconv.load_state_dict(state_dict_qconv)
 
-def replace_conv_with_qconv_v2(module):
+def replace_conv_with_qconv_v2_qat(module):
     for name, child_module in module.named_children():
         if isinstance(child_module, Detect):
             continue
         elif isinstance(child_module, Conv):
             # Replace C2f with C2f_v2 while preserving its parameters
             conv2d = child_module.conv
-            c1 = conv2d.in_channels
-            c2 = conv2d.out_channels
-            k = conv2d.kernel_size
-            s = conv2d.stride
-            p = conv2d.padding
-            g = conv2d.groups
-            d = conv2d.dilation[0]
+            (c1, c2, k, s, p, g, d) = (conv2d.in_channels, conv2d.out_channels, conv2d.kernel_size, 
+                                conv2d.stride, conv2d.padding, conv2d.groups, conv2d.dilation[0])
             qconv = Q_Conv(c1, c2, k, s, p=p, g=g, d=d)
+            setattr(module, name, qconv)
+            transfer_weights_qconv(child_module, qconv) 
+            qconv.eval()
+            quantization.fuse_modules(qconv, [['conv', 'bn', 'act']], inplace=True)
+        else:
+            replace_conv_with_qconv_v2_qat(child_module)
+
+def replace_conv_with_qconv_v2_ptq(module):
+    for name, child_module in module.named_children():
+        if isinstance(child_module, Detect):
+            continue
+        elif isinstance(child_module, Conv):
+            # Replace C2f with C2f_v2 while preserving its parameters
+            conv2d = child_module.conv
+            (c1, c2, k, s, p, g, d) = (conv2d.in_channels, conv2d.out_channels, conv2d.kernel_size, 
+                                conv2d.stride, conv2d.padding, conv2d.groups, conv2d.dilation[0])
+            qconv = Q_Conv(c1, c2, k, s, p=p, g=g, d=d)
+            qconfig = QConfig(activation=quantization.HistogramObserver.with_args(dtype=torch.qint8, qscheme=torch.per_tensor_affine),
+                                weight=quantization.HistogramObserver.with_args(dtype=torch.qint8, qscheme=torch.per_tensor_affine)
+                            )
+            qconv.qconfig = quantization.get_default_qconfig(qconfig)
             setattr(module, name, qconv)
             transfer_weights_qconv(child_module, qconv) 
             qconv.eval()
             torch.quantization.fuse_modules(qconv, [['conv', 'bn', 'act']], inplace=True)
         else:
-            replace_conv_with_qconv_v2(child_module)
+            replace_conv_with_qconv_v2_ptq(child_module)
         
 def attempt_load_one_weight_v2(weight, device=None, inplace=True, fuse=False):
     """Loads a single model weights."""

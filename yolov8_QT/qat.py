@@ -34,7 +34,7 @@ from ultralytics.yolo.cfg import get_cfg
 from copy import deepcopy
 from datetime import datetime
 from tqdm import tqdm
-from utils import attempt_load_one_weight_v2, replace_conv_with_qconv_v2
+from utils import attempt_load_one_weight_v2, replace_conv_with_qconv_v2_qat
 
 def _setup_train_v2(self: BaseTrainer, world_size):
     """
@@ -42,7 +42,7 @@ def _setup_train_v2(self: BaseTrainer, world_size):
     """
     # QAT setup
     if '.pt' in self.args.model:
-        replace_conv_with_qconv_v2(self.model)
+        replace_conv_with_qconv_v2_qat(self.model)
     else:
         self.model.eval()
         for m in self.model.modules():

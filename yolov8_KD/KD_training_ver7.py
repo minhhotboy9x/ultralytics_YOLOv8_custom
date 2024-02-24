@@ -85,10 +85,6 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
         (_, _), teacher_features =  self.teacher(dump_image, mask_id = tea_mask_ids)
 
     self.alpha_kd = 1.0 # default 2.0
-    self.kd_decay = ExponentialDecayVariable(initial_value=self.alpha_kd, decay_rate = 0.1, min_value=0.0)
-    for epoch in range(0, self.start_epoch): # get the decay if resume training
-        self.kd_decay.step()
-        
     for epoch in range(self.start_epoch, self.epochs):
         self.epoch = epoch
         self.run_callbacks('on_train_epoch_start')
@@ -179,7 +175,7 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                     else self.loss_items
 
             # Backward
-            self.scaler.scale(self.loss + self.kd_decay.value * self.kd_loss).backward()
+            self.scaler.scale(self.loss + self.alpha_kd * self.kd_loss).backward()
 
             # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
             if ni - last_opt_step >= self.accumulate:
@@ -195,7 +191,7 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                 # , self.kd_loss
                 pbar.set_description(
                     ('%11s' * 2 + '%11.4g' * (4 + loss_len)) % 
-                    (f'{epoch + 1}/{self.epochs}', mem, *losses, batch['cls'].shape[0], batch['img'].shape[-1], self.t_kdloss, self.kd_decay.value))
+                    (f'{epoch + 1}/{self.epochs}', mem, *losses, batch['cls'].shape[0], batch['img'].shape[-1], self.t_kdloss, self.alpha_kd))
                 self.run_callbacks('on_batch_end')
                 if self.args.plots and ni in self.plot_idx:
                     self.plot_training_samples(batch, ni)

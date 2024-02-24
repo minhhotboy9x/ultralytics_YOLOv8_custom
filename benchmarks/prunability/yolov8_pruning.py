@@ -18,7 +18,8 @@ import torch
 import torch.nn as nn
 from matplotlib import pyplot as plt
 from ultralytics import YOLO, __version__
-from ultralytics.nn.modules import Detect, C2f, Conv, Bottleneck
+from ultralytics.nn.modules import Detect, C2f, Conv, Bottleneck, C2f_v2
+from ultralytics.nn.modules_deformable import TDetect
 from ultralytics.nn.tasks import attempt_load_one_weight
 from ultralytics.yolo.engine.model import TASK_MAP
 from ultralytics.yolo.engine.trainer import BaseTrainer
@@ -144,21 +145,21 @@ def infer_shortcut(bottleneck):
     return c1 == c2 and hasattr(bottleneck, 'add') and bottleneck.add
 
 
-class C2f_v2(nn.Module):
-    # CSP Bottleneck with 2 convolutions
-    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
-        super().__init__()
-        self.c = int(c2 * e)  # hidden channels
-        self.cv0 = Conv(c1, self.c, 1, 1)
-        self.cv1 = Conv(c1, self.c, 1, 1)
-        self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
-        self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
+# class C2f_v2(nn.Module):
+#     # CSP Bottleneck with 2 convolutions
+#     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+#         super().__init__()
+#         self.c = int(c2 * e)  # hidden channels
+#         self.cv0 = Conv(c1, self.c, 1, 1)
+#         self.cv1 = Conv(c1, self.c, 1, 1)
+#         self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
+#         self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
 
-    def forward(self, x):
-        # y = list(self.cv1(x).chunk(2, 1))
-        y = [self.cv0(x), self.cv1(x)]
-        y.extend(m(y[-1]) for m in self.m)
-        return self.cv2(torch.cat(y, 1))
+#     def forward(self, x):
+#         # y = list(self.cv1(x).chunk(2, 1))
+#         y = [self.cv0(x), self.cv1(x)]
+#         y.extend(m(y[-1]) for m in self.m)
+#         return self.cv2(torch.cat(y, 1))
 
 
 def transfer_weights(c2f, c2f_v2):
@@ -334,6 +335,7 @@ def prune(args):
     pruning_cfg['data'] = args.data
     pruning_cfg['epochs'] = args.epochs
     pruning_cfg["imgsz"] = args.imgsz
+    pruning_cfg['lr0'] = args.lr0
 
     model.model.train()
 
@@ -394,7 +396,10 @@ def prune(args):
         unwrapped_parameters = []
         for m in model.model.modules():
             if isinstance(m, (Detect,)):
-                ignored_layers.append(m)
+                for modulelist in m.cv2:
+                    ignored_layers.append(modulelist[-1])
+                for modulelist in m.cv3:
+                    ignored_layers.append(modulelist[-1])
         
         example_inputs = example_inputs.to(model.device)
         pruner = tp.pruner.MagnitudePruner(
@@ -464,7 +469,7 @@ if __name__ == "__main__":
                              ' This file should have same format with ultralytics/yolo/cfg/default.yaml')
     parser.add_argument('--iterative-steps', default=16, type=int, help='Total pruning iteration step')
     parser.add_argument('--target-prune-rate', default=0.5, type=float, help='Target pruning rate')
-    parser.add_argument('--max-map-drop', default=0.04, type=float, help='Allowed maximum map drop after fine-tuning')
+    parser.add_argument('--max-map-drop', default=0.03, type=float, help='Allowed maximum map drop after fine-tuning')
 
     parser.add_argument('--batch', default=4, type=int, help='batch_size')
     parser.add_argument('--data', default='coco128.yaml', help='dataset')
@@ -472,6 +477,7 @@ if __name__ == "__main__":
     parser.add_argument('--project', default='pruning', help='project name')
     parser.add_argument('--epochs', type=int, default=10, help='epochs each iterative-steps')
     parser.add_argument('--imgsz', type=int, default=640, help='Size of input images')
+    parser.add_argument('--lr0', type=float, default=0.001, help='Inintial learning rate')
     parser.add_argument('--workers', type=int, default=4, help="number of worker threads for data loading (per RANK if DDP)")
 
     args = parser.parse_args()

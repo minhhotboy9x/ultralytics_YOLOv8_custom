@@ -8,7 +8,7 @@ import thop
 import torch
 import torch.nn as nn
 
-from ultralytics.nn.modules import (C1, C2, C3, C3TR, SPP, SPPF, Bottleneck, BottleneckCSP, C2f, C3Ghost, C3x, Classify,
+from ultralytics.nn.modules import (C1, C2, C3, C3TR, SPP, SPPF, Bottleneck, BottleneckCSP, C2f, C2fGhost, C3Ghost, C3x, Classify,
                                     Concat, Conv, ConvTranspose, Detect, DWConv, DWConvTranspose2d, Ensemble, Focus, TransformerBlock, 
                                     GhostBottleneck, GhostConv, Pose, Segment)
 
@@ -496,7 +496,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
 
         n = n_ = max(round(n * depth), 1) if n > 1 else n  # depth gain
         if m in (Classify, Conv, ConvTranspose, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, Focus,
-                 BottleneckCSP, C1, C2, C2f, C3, C3TR, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x, DeConv) \
+                 BottleneckCSP, C1, C2, C2f, C2fGhost, C3, C3TR, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x, DeConv) \
             or m in (Q_Conv, Q_ConvTranspose, Q_GhostConv, Q_Bottleneck, Q_GhostBottleneck, Q_SPP, Q_SPPF, Q_DWConv, Q_Focus,
                  Q_BottleneckCSP, Q_C1, Q_C2, Q_C2f, Q_C3, Q_C3TR, Q_C3Ghost, Q_C3x, Q_DWConvTranspose2d):
             c1, c2 = ch[f], args[0]
@@ -504,7 +504,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 c2 = make_divisible(min(c2, max_channels) * width, 8)
 
             args = [c1, c2, *args[1:]]
-            if m in (BottleneckCSP, C1, C2, C2f, C3, C3TR, C3Ghost, C3x) or \
+            if m in (BottleneckCSP, C1, C2, C2f, C2fGhost, C3, C3TR, C3Ghost, C3x) or \
                 m in (Q_BottleneckCSP, Q_C1, Q_C2, Q_C2f, Q_C3, Q_C3TR, Q_C3Ghost, Q_C3x):
                 args.insert(2, n)  # number of repeats
                 n = 1
