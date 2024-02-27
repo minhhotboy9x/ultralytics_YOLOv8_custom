@@ -22,16 +22,18 @@ class MyModel(nn.Module):
         self.qconfig = torch.ao.quantization.get_default_qconfig('fbgemm')
     def forward(self, x):
         return self.dequant(self.model(self.quant(x)))
+    
+def sum_tensors(feature_maps):
+    stacked_tensor = torch.stack(feature_maps)  # Xếp các tensor trong list theo chiều mới (0)
+    summed_tensor = torch.sum(stacked_tensor, dim=0)  # Tính tổng theo chiều mới (0)
+    return summed_tensor
+
 
 if __name__ == '__main__':
-    input = torch.randn(1, 3, 224, 224)
-    model = MyModel()
-    print(model)
-    torch.quantization.prepare_qat(model, inplace=True)
-    output = model(input)
-    loss = 10 - output.sum()
-    loss.backward()
-    print(model)
-    quantized_model = torch.quantization.convert(model)
-    # Lưu mô hình
-    torch.save(model, 'test_quantized.pt')
+    
+    # Tạo một danh sách chứa các tensor
+    feature_maps = [torch.randn(1, 64, 80, 80), torch.randn(1, 64, 80, 80), torch.randn(1, 64, 80, 80)]
+
+    # Tính tổng các tensor và kiểm tra kích thước
+    output = sum_tensors(feature_maps)
+    print("Kích thước feature map sau khi tính tổng:", output.size())

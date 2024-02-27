@@ -405,6 +405,7 @@ def prune(args):
         pruner = tp.pruner.MagnitudePruner(
             model.model,
             example_inputs,
+            global_pruning = True, # additional test
             importance=tp.importance.MagnitudeImportance(p=2),  # L2 norm pruning,
             iterative_steps=1,
             ch_sparsity=ch_sparsity,

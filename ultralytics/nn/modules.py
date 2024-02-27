@@ -19,6 +19,13 @@ def autopad(k, p=None, d=1):  # kernel, padding, dilation
         p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
     return p
 
+class Add(nn.Module):
+    """Add tensor with the same size"""
+    def __init__(self, args=[]):
+        super().__init__()
+
+    def forward(self, x):
+        return torch.sum(torch.stack(x), dim=0)
 
 class Conv(nn.Module):
     """Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation)."""
@@ -208,7 +215,6 @@ class C2(nn.Module):
 
 class C2f(nn.Module):
     """CSP Bottleneck with 2 convolutions."""
-
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
         self.c = int(c2 * e)  # hidden channels
@@ -228,13 +234,6 @@ class C2f(nn.Module):
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
 
-class C2fGhost(C2f):
-    """CSP Bottleneck with 2 convolutions."""
-    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=1):  # ch_in, ch_out, number, shortcut, groups, expansion
-        super().__init__(c1, c2, n, shortcut, g, e)
-        self.m = nn.ModuleList(GhostBottleneck(self.c, self.c) for _ in range(n))
-
-
 class C2f_v2(nn.Module):
     # CSP Bottleneck with 2 convolutions
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
@@ -250,6 +249,12 @@ class C2f_v2(nn.Module):
         y = [self.cv0(x), self.cv1(x)]
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
+
+class C2fGhost(C2f):
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = int (c2 *e)
+        self.m = nn.Sequential(*(GhostBottleneck(c_, c_) for _ in range(n)))
 
 class ChannelAttention(nn.Module):
     """Channel-attention module https://github.com/open-mmlab/mmdetection/tree/v3.0.0rc1/configs/rtmdet."""

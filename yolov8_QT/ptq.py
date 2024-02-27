@@ -18,6 +18,7 @@ from ultralytics.yolo.utils.torch_utils import de_parallel
 from ultralytics.yolo.data import build_dataloader
 from tqdm import tqdm
 from utils import replace_conv_with_qconv_v2_ptq
+from itertools import islice
 
 def preprocess_batch(batch, device): #preprocess_batch trong từng ảnh
     """Preprocesses a batch of images by scaling and converting to float."""
@@ -32,9 +33,9 @@ def calibration(model, args):
     gs = max(int(de_parallel(model).stride.max() if model else 0), 32)
     train_loader = build_dataloader(args, args.batch, img_path=trainset, stride=gs, rank=RANK, mode='train',
                              rect=False, data_info=data)[0]
-    nb = len(train_loader)
+    nb = min(len(train_loader), 2000 // args.batch)
     print('--------Calibration start--------')
-    pbar = tqdm(enumerate(train_loader), total=nb, bar_format=TQDM_BAR_FORMAT)
+    pbar = tqdm(enumerate(islice(train_loader, nb)), total=nb, bar_format=TQDM_BAR_FORMAT)
     for i, batch in pbar:
         batch = preprocess_batch(batch, device)
         model(batch['img'])
@@ -62,7 +63,7 @@ if __name__ == '__main__':
     parser.add_argument('--model', default='yolov8n.pt', help='Pretrained pruning target model file')
     parser.add_argument('--batch', default=4, type=int, help='batch_size')
     parser.add_argument('--data', default='coco128.yaml', help='dataset')
-    parser.add_argument('--device', default='cpu', help='cpu or gpu')
+    parser.add_argument('--device', default=0, help='cpu or gpu')
     parser.add_argument('--imgsz', type=int, default=640, help='Size of input images')
     
     args = parser.parse_args()
