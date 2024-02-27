@@ -4,7 +4,7 @@ from ultralytics import YOLO
 from ultralytics.yolo.utils import yaml_load, LOGGER, RANK
 import onnx
 from thop import profile
-from ultralytics.nn.modules import Detect, C2f, Conv, Bottleneck, C2fGhost, GhostBottleneck
+from ultralytics.nn.modules import Detect, C2f, Conv, Bottleneck, C2fGhost, GhostBottleneck, CBAM
 import onnxruntime
 import time
 
@@ -29,11 +29,11 @@ import time
 # model = YOLO('asset/trained_model/UA-DETRAC/pruning/l2/v8s_DETRAC_prune_0.1_local_l2.pt')
 # model = YOLO('asset/trained_model/UA-DETRAC/v8s_DETRAC.torchscript')
 # model = YOLO('asset/trained_model/UA-DETRAC/pruning/l2/v8s_DETRAC_prune_0.1_local_l2.pt')
-model = YOLO('yolov8n.yaml')
+# model = YOLO('yolov8n.yaml')
 # model = YOLO('runs/detect/train8/weights/best.pt') 
 # model = YOLO("asset/trained_model/UA-DETRAC_torchscript/v8n_UA_DETRAC_default_ptq.torchscript")
 # model = torch.jit.load("asset/trained_model/UA-DETRAC_torchscript/v8n_UA_DETRAC_default_ptq.torchscript", map_location=torch.device('cpu'))
-
+cv1 = CBAM(3)
 if __name__ == '__main__':
     
     # model.train(data = 'coco.yaml', epochs = 500, batch=16, device = 0, project='coco')
@@ -42,7 +42,7 @@ if __name__ == '__main__':
     # run 15 detect v8n
     # run 16 detect v8s
     # model.train(data = 'UA-DETRAC.yaml', epochs = 500, lr0 = 0.001, batch=16, device = 1) 
-    model.info()
+    # model.info()
     # model.export()
     # metrics = model.val(data = 'UA-DETRAC.yaml', batch=4, device='cpu') 
     # metrics = model.val(data = 'UA-DETRAC.yaml', batch=4, device='cpu') 
@@ -52,6 +52,7 @@ if __name__ == '__main__':
     # model.train(data = 'coco128.yaml', epochs=5, project='coco_128')
 
     input_tensor = torch.randn(100, 3, 640, 640)
+    print(cv1(input_tensor).shape)
     # t_time = 0
     # for i in range(100):
     # # Suy luận trên dữ liệu
