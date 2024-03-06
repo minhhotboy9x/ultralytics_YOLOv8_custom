@@ -11,17 +11,17 @@ SIZE = (960, 540)
 # tracker = Sort()
 
 
-image = Image.open('MVI_40244_img00675.jpg')
+image = Image.open('MVI_40141_img00268.jpg')
 
 # Tạo đối tượng ImageDraw để vẽ lên ảnh
 draw = ImageDraw.Draw(image)
 
 
 # model = YOLO('/home/minhnq/ultralytics/pruning/train5/step_4_finetune/weights/best.onnx', task='detect')
-model = YOLO('/home/minhnq/ultralytics/runs/detect/train10/weights/best.pt', task='detect')
+model = YOLO('/home/minhnq/ultralytics/runs/detect/train17/weights/best.pt', task='detect')
 # model.export(format = 'onnx')
 
-results = model.predict('MVI_40244_img00675.jpg')
+results = model.predict('MVI_40141_img00268.jpg', device=2)
 # Mở ảnh sử dụng thư viện Pillow
 
 
@@ -33,7 +33,7 @@ for result in results:
         # w = SIZE[0]*box[2]
         # y = SIZE[1]*box[1]
         # h = SIZE[1]*box[3]
-        # print(cls, x, y, w, h)
+        # print(box_xyxy)
         box_xy = box_xyxy[:2]
         box_wh = box_xywh[2:]
         print(cls, box_xy, box_wh)

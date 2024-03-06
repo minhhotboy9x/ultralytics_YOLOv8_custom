@@ -24,40 +24,50 @@ import time
 #         y.extend(m(y[-1]) for m in self.m)
 #         return self.cv2(torch.cat(y, 1))
     
-# model = YOLO('yolov8n.pt') 
-# model = YOLO('yolov8s.pt')
-# model = YOLO('asset/trained_model/UA-DETRAC/pruning/l2/v8s_DETRAC_prune_0.1_local_l2.pt')
-# model = YOLO('asset/trained_model/UA-DETRAC/v8s_DETRAC.torchscript')
-# model = YOLO('asset/trained_model/UA-DETRAC/pruning/l2/v8s_DETRAC_prune_0.1_local_l2.pt')
+model = YOLO('yolov8s.pt') 
+# model = YOLO('runs/detect/train17/weights/best.pt')
+# model = YOLO('asset/trained_model/UA-DETRAC/v8s_silu_DETRAC.pt')
+# model = YOLO('pruning/train5/step_0_finetune/weights/best.pt')
+# model = YOLO('asset/trained_model/UA-DETRAC/pruning/l2/v8s_silu_DETRAC_prune_0.1_global_l2.pt')
 # model = YOLO('yolov8n.yaml')
-# model = YOLO('runs/detect/train8/weights/best.pt') 
+# model = YOLO('pruning/train3/step_1_finetune/weights/best.pt') 
+# model = YOLO('pruning/train4/step_0_finetune/weights/best.pt') 
 # model = YOLO("asset/trained_model/UA-DETRAC_torchscript/v8n_UA_DETRAC_default_ptq.torchscript")
 # model = torch.jit.load("asset/trained_model/UA-DETRAC_torchscript/v8n_UA_DETRAC_default_ptq.torchscript", map_location=torch.device('cpu'))
-cv1 = CBAM(3)
+# cv1 = CBAM(3)
 if __name__ == '__main__':
-    
-    # model.train(data = 'coco.yaml', epochs = 500, batch=16, device = 0, project='coco')
+    # model.train(data = 'coco.yaml', epochs = 500, batch=32, device = 0, project='coco')
+    # model.train(data = 'coco.yaml', epochs = 500, batch=32, device = 0, project='coco')
     # model.train(data = 'coco128.yaml', epochs = 5, project='coco_128', device = 1) 
     # print(model.model)
     # run 15 detect v8n
     # run 16 detect v8s
-    # model.train(data = 'UA-DETRAC.yaml', epochs = 500, lr0 = 0.001, batch=16, device = 1) 
+    model.train(data = 'UA-DETRAC.yaml', epochs = 500, lr0 = 1e-4, batch=16, device = 3) 
     # model.info()
     # model.export()
     # metrics = model.val(data = 'UA-DETRAC.yaml', batch=4, device='cpu') 
-    # metrics = model.val(data = 'UA-DETRAC.yaml', batch=4, device='cpu') 
+    # metrics = model.val(data = 'coco_minitrain_10k.yaml', batch=32, device='3') 
 
-    # metrics = model.val(data = 'UA-DETRAC.yaml', batch=16, device=1) 
+    # metrics = model.val(data = 'UA-DETRAC.yaml', batch=32, device=3) 
     # print(metrics)
     # model.train(data = 'coco128.yaml', epochs=5, project='coco_128')
-
-    input_tensor = torch.randn(100, 3, 640, 640)
-    print(cv1(input_tensor).shape)
+    # model.model.eval()
+    # model2.model.eval()
+    # input_tensor = torch.randn(100, 3, 640, 640)
     # t_time = 0
     # for i in range(100):
     # # Suy luận trên dữ liệu
     #     start_time = time.time()
-    #     output = model2(input_tensor[i:i+1], verbose=False)
+    #     output = model2(input_tensor[i:i+1], verbose=False, device='cpu')
+    #     end_time = time.time()
+    #     t_time += end_time - start_time
+    # print(t_time/100 * 1000)
+
+    # t_time = 0
+    # for i in range(100):
+    # # Suy luận trên dữ liệu
+    #     start_time = time.time()
+    #     output = model(input_tensor[i:i+1], verbose=False, device='cpu')
     #     end_time = time.time()
     #     t_time += end_time - start_time
     # print(t_time/100 * 1000)

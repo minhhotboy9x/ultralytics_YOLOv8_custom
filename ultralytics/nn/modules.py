@@ -254,7 +254,7 @@ class C2fGhost(C2f):
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int (c2 *e)
-        self.m = nn.Sequential(*(GhostBottleneck(c_, c_) for _ in range(n)))
+        self.m = nn.Sequential(*(GhostBottleneck_sc(c_, c_, shortcut) for _ in range(n)))
 
 class ChannelAttention(nn.Module):
     """Channel-attention module https://github.com/open-mmlab/mmdetection/tree/v3.0.0rc1/configs/rtmdet."""
@@ -422,6 +422,19 @@ class GhostBottleneck(nn.Module):
         """Applies skip connection and concatenation to input tensor."""
         return self.conv(x) + self.shortcut(x)
 
+class GhostBottleneck_sc(nn.Module):
+    """Ghost Bottleneck with shortcut"""
+    def __init__(self, c1, c2, shortcut=True):  # ch_in, ch_out, shortcut, groups, kernels, expand
+        super().__init__()
+        c_ = c2 // 2
+        self.conv = nn.Sequential(
+            GhostConv(c1, c_, 1, 1),  # pw
+            GhostConv(c_, c2, 1, 1, act=False))  # pw-linear
+        self.add = shortcut and c1 == c2
+
+    def forward(self, x):
+        """Applies skip connection and concatenation to input tensor."""
+        return x + self.conv(x) if self.add else self.conv(x)
 
 class Concat(nn.Module):
     """Concatenate a list of tensors along dimension."""

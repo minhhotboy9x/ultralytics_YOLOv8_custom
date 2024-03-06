@@ -28,12 +28,15 @@ def preprocess_batch(batch, device): #preprocess_batch trong từng ảnh
 def calibration(model, args):
     data = check_det_dataset(args.data)
     trainset = data['train']
-    device = torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else "cpu")
+    if args.device != 'cpu':
+        device = torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else "cpu")
+    else:
+        device = 'cpu'
     model.to(device)
     gs = max(int(de_parallel(model).stride.max() if model else 0), 32)
     train_loader = build_dataloader(args, args.batch, img_path=trainset, stride=gs, rank=RANK, mode='train',
                              rect=False, data_info=data)[0]
-    nb = min(len(train_loader), 2000 // args.batch)
+    nb = len(train_loader)
     print('--------Calibration start--------')
     pbar = tqdm(enumerate(islice(train_loader, nb)), total=nb, bar_format=TQDM_BAR_FORMAT)
     for i, batch in pbar:
@@ -45,8 +48,6 @@ def main(args):
     args = get_cfg(DEFAULT_CFG, vars(args))
     model = YOLO(args.model, task='detect')
     detect_model = model.model
-    # print('before replace:', detect_model.model[0].conv.weight[0, :, :, :])
-    # print(model)
     replace_conv_with_qconv_v2_ptq(detect_model)
     torch.quantization.prepare(detect_model, inplace=True)
     calibration(detect_model, args)
@@ -61,7 +62,7 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='yolov8n.pt', help='Pretrained pruning target model file')
-    parser.add_argument('--batch', default=4, type=int, help='batch_size')
+    parser.add_argument('--batch', default=8, type=int, help='batch_size')
     parser.add_argument('--data', default='coco128.yaml', help='dataset')
     parser.add_argument('--device', default=0, help='cpu or gpu')
     parser.add_argument('--imgsz', type=int, default=640, help='Size of input images')

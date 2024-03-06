@@ -8,6 +8,10 @@ from ultralytics.yolo.utils import (DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS)
 from ultralytics.nn.tasks import torch_safe_load, guess_model_task
 from torch.ao.quantization.qconfig import QConfig
 
+def forward(self:Q_Conv, x):
+    """Apply convolution if act=SiLu."""
+    return self.act(self.dequant(self.bn(self.conv(self.quant(x)))))
+
 def transfer_weights_qconv(conv, qconv):
     state_dict_conv = conv.state_dict()
     state_dict_qconv = qconv.state_dict()
@@ -27,13 +31,18 @@ def replace_conv_with_qconv_v2_qat(module):
         elif isinstance(child_module, Conv):
             # Replace C2f with C2f_v2 while preserving its parameters
             conv2d = child_module.conv
-            (c1, c2, k, s, p, g, d) = (conv2d.in_channels, conv2d.out_channels, conv2d.kernel_size, 
-                                conv2d.stride, conv2d.padding, conv2d.groups, conv2d.dilation[0])
-            qconv = Q_Conv(c1, c2, k, s, p=p, g=g, d=d)
+            (c1, c2, k, s, p, g, d, act) = (conv2d.in_channels, conv2d.out_channels, conv2d.kernel_size, 
+                                conv2d.stride, conv2d.padding, conv2d.groups, conv2d.dilation[0], child_module.act)
+            qconv = Q_Conv(c1, c2, k, s, p=p, g=g, d=d, act=act)
             setattr(module, name, qconv)
             transfer_weights_qconv(child_module, qconv) 
             qconv.eval()
-            quantization.fuse_modules(qconv, [['conv', 'bn', 'act']], inplace=True)
+            if not isinstance(act, nn.ReLU):
+                torch.quantization.fuse_modules(qconv, [['conv', 'bn']], inplace=True)
+                qconv.forward = forward.__get__(qconv)
+            else:
+                
+                torch.quantization.fuse_modules(qconv, [['conv', 'bn', 'act']], inplace=True)
         else:
             replace_conv_with_qconv_v2_qat(child_module)
 
@@ -44,17 +53,22 @@ def replace_conv_with_qconv_v2_ptq(module):
         elif isinstance(child_module, Conv):
             # Replace C2f with C2f_v2 while preserving its parameters
             conv2d = child_module.conv
-            (c1, c2, k, s, p, g, d) = (conv2d.in_channels, conv2d.out_channels, conv2d.kernel_size, 
-                                conv2d.stride, conv2d.padding, conv2d.groups, conv2d.dilation[0])
-            qconv = Q_Conv(c1, c2, k, s, p=p, g=g, d=d)
-            qconfig = QConfig(activation=quantization.HistogramObserver.with_args(dtype=torch.qint8, qscheme=torch.per_tensor_affine),
-                                weight=quantization.HistogramObserver.with_args(dtype=torch.qint8, qscheme=torch.per_tensor_affine)
+            (c1, c2, k, s, p, g, d, act) = (conv2d.in_channels, conv2d.out_channels, conv2d.kernel_size, 
+                                conv2d.stride, conv2d.padding, conv2d.groups, conv2d.dilation[0], child_module.act)
+            qconv = Q_Conv(c1, c2, k, s, p=p, g=g, d=d, act=act)
+            qconfig = QConfig(activation=quantization.HistogramObserver.with_args(reduce_range=True, qscheme=torch.per_tensor_affine),
+                                weight=quantization.PerChannelMinMaxObserver.with_args(dtype=torch.qint8, qscheme=torch.per_channel_affine)
                             )
-            qconv.qconfig = quantization.get_default_qconfig(qconfig)
+            # qconfig = quantization.get_default_qconfig()
+            qconv.qconfig = qconfig
             setattr(module, name, qconv)
             transfer_weights_qconv(child_module, qconv) 
             qconv.eval()
-            torch.quantization.fuse_modules(qconv, [['conv', 'bn', 'act']], inplace=True)
+            if not isinstance(act, nn.ReLU):
+                torch.quantization.fuse_modules(qconv, [['conv', 'bn']], inplace=True)
+                qconv.forward = forward.__get__(qconv)
+            else:
+                torch.quantization.fuse_modules(qconv, [['conv', 'bn', 'act']], inplace=True)
         else:
             replace_conv_with_qconv_v2_ptq(child_module)
         

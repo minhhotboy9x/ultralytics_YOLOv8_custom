@@ -10,7 +10,7 @@ import torch.nn as nn
 
 from ultralytics.nn.modules import (Add, C1, C2, C3, C3TR, SPP, SPPF, Bottleneck, BottleneckCSP, C2f, C2fGhost, C3Ghost, C3x, Classify,
                                     Concat, Conv, ConvTranspose, Detect, DWConv, DWConvTranspose2d, Ensemble, Focus, TransformerBlock, 
-                                    GhostBottleneck, GhostConv, Pose, Segment)
+                                    GhostBottleneck, GhostConv, CBAM, Pose, Segment)
 
 from ultralytics.nn.modules_quantized import (Q_C1, Q_C2, Q_C3, Q_Conv, Q_BottleneckCSP, Q_Bottleneck, Q_ConvTranspose, Q_DWConv,
                                               Q_DWConvTranspose2d, Q_TransformerBlock, Q_TransformerLayer, Q_C3x, Q_C3TR, Q_C2f,
@@ -508,7 +508,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 m in (Q_BottleneckCSP, Q_C1, Q_C2, Q_C2f, Q_C3, Q_C3TR, Q_C3Ghost, Q_C3x):
                 args.insert(2, n)  # number of repeats
                 n = 1
-        elif m is nn.BatchNorm2d:
+        elif m is nn.BatchNorm2d or m is CBAM:
             args = [ch[f]]
         elif m is Add:
             args = []

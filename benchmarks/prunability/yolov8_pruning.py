@@ -470,7 +470,7 @@ if __name__ == "__main__":
                              ' This file should have same format with ultralytics/yolo/cfg/default.yaml')
     parser.add_argument('--iterative-steps', default=16, type=int, help='Total pruning iteration step')
     parser.add_argument('--target-prune-rate', default=0.5, type=float, help='Target pruning rate')
-    parser.add_argument('--max-map-drop', default=0.03, type=float, help='Allowed maximum map drop after fine-tuning')
+    parser.add_argument('--max-map-drop', default=0.2, type=float, help='Allowed maximum map drop after fine-tuning')
 
     parser.add_argument('--batch', default=4, type=int, help='batch_size')
     parser.add_argument('--data', default='coco128.yaml', help='dataset')
@@ -478,7 +478,7 @@ if __name__ == "__main__":
     parser.add_argument('--project', default='pruning', help='project name')
     parser.add_argument('--epochs', type=int, default=10, help='epochs each iterative-steps')
     parser.add_argument('--imgsz', type=int, default=640, help='Size of input images')
-    parser.add_argument('--lr0', type=float, default=0.001, help='Inintial learning rate')
+    parser.add_argument('--lr0', type=float, default=0.0001, help='Inintial learning rate')
     parser.add_argument('--workers', type=int, default=4, help="number of worker threads for data loading (per RANK if DDP)")
 
     args = parser.parse_args()
