@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from copy import deepcopy
 import torch.quantization as quantization
 from ultralytics.nn.modules import Detect, C2f, Conv, Bottleneck, C2f_v2
 from ultralytics.nn.modules_quantized import Q_Conv
@@ -12,17 +13,46 @@ def forward(self:Q_Conv, x):
     """Apply convolution if act=SiLu."""
     return self.act(self.dequant(self.bn(self.conv(self.quant(x)))))
 
+def compare_weights(conv, qconv):
+    input = torch.randn(1, conv.conv.out_channels, 20, 20)
+    qconv.eval()
+    conv.eval()
+    out1 = conv.bn(input)
+    out2 = qconv.bn(input)
+    # Trích xuất trọng số của lớp Conv và BatchNorm từ Conv
+    conv_weight = conv.conv.weight.data
+    conv_bn_weight = conv.bn.weight.data
+    conv_bn_bias = conv.bn.bias.data
+    conv_bn_running_mean = conv.bn.running_mean
+    conv_bn_running_var = conv.bn.running_var
+
+    # Trích xuất trọng số của lớp Conv và BatchNorm từ Q_Conv
+    qconv_weight = qconv.conv.weight.data
+    qconv_bn_weight = qconv.bn.weight.data
+    qconv_bn_bias = qconv.bn.bias.data
+    qconv_bn_running_mean = qconv.bn.running_mean
+    qconv_bn_running_var = qconv.bn.running_var
+
+    
+    convolution_weights_equal = torch.all(conv_weight.eq(qconv_weight))
+    batchnorm_weights_equal = torch.all(conv_bn_weight.eq(qconv_bn_weight)) and \
+                               torch.all(conv_bn_bias.eq(qconv_bn_bias)) and \
+                               torch.all(conv_bn_running_mean.eq(qconv_bn_running_mean)) and \
+                               torch.all(conv_bn_running_var.eq(qconv_bn_running_var))
+
+    print("Convolution weights equal: ", convolution_weights_equal)
+    print("BatchNorm weights equal: ", batchnorm_weights_equal)
+    print("Output weights equal: ", (out1-out2).sum())
+
 def transfer_weights_qconv(conv, qconv):
-    state_dict_conv = conv.state_dict()
-    state_dict_qconv = qconv.state_dict()
-    state_dict_qconv['conv.weight'] = state_dict_conv['conv.weight']
-    for bn_key in ['weight', 'bias', 'running_mean', 'running_var']:
-        state_dict_qconv[f'bn.{bn_key}'] = state_dict_conv[f'bn.{bn_key}']
+    qconv.bn = deepcopy(conv.bn)
     for attr_name in dir(conv):
         attr_value = getattr(conv, attr_name)
         if not callable(attr_value) and '_' not in attr_name:
             setattr(qconv, attr_name, attr_value)
-    qconv.load_state_dict(state_dict_qconv)
+    # qconv.load_state_dict(state_dict_qconv)
+    qconv.load_state_dict(conv.state_dict())
+    # compare_weights(conv, qconv)
 
 def replace_conv_with_qconv_v2_qat(module):
     for name, child_module in module.named_children():
@@ -35,13 +65,12 @@ def replace_conv_with_qconv_v2_qat(module):
                                 conv2d.stride, conv2d.padding, conv2d.groups, conv2d.dilation[0], child_module.act)
             qconv = Q_Conv(c1, c2, k, s, p=p, g=g, d=d, act=act)
             setattr(module, name, qconv)
-            transfer_weights_qconv(child_module, qconv) 
             qconv.eval()
+            transfer_weights_qconv(child_module, qconv) 
             if not isinstance(act, nn.ReLU):
                 torch.quantization.fuse_modules(qconv, [['conv', 'bn']], inplace=True)
                 qconv.forward = forward.__get__(qconv)
             else:
-                
                 torch.quantization.fuse_modules(qconv, [['conv', 'bn', 'act']], inplace=True)
         else:
             replace_conv_with_qconv_v2_qat(child_module)
@@ -57,13 +86,14 @@ def replace_conv_with_qconv_v2_ptq(module):
                                 conv2d.stride, conv2d.padding, conv2d.groups, conv2d.dilation[0], child_module.act)
             qconv = Q_Conv(c1, c2, k, s, p=p, g=g, d=d, act=act)
             qconfig = QConfig(activation=quantization.HistogramObserver.with_args(reduce_range=True, qscheme=torch.per_tensor_affine),
-                                weight=quantization.PerChannelMinMaxObserver.with_args(dtype=torch.qint8, qscheme=torch.per_channel_affine)
+                                weight=quantization.MinMaxObserver.with_args(dtype=torch.qint8, qscheme=torch.per_tensor_affine)
                             )
-            # qconfig = quantization.get_default_qconfig()
+
+            # qconfig = quantization.get_default_qat_qconfig()
             qconv.qconfig = qconfig
             setattr(module, name, qconv)
-            transfer_weights_qconv(child_module, qconv) 
             qconv.eval()
+            transfer_weights_qconv(child_module, qconv) 
             if not isinstance(act, nn.ReLU):
                 torch.quantization.fuse_modules(qconv, [['conv', 'bn']], inplace=True)
                 qconv.forward = forward.__get__(qconv)

@@ -16,6 +16,9 @@ sys.path.append(ultralytics_dir)
 import numpy as np
 import torch
 import torch.nn as nn
+import time
+from tqdm import tqdm
+
 from matplotlib import pyplot as plt
 from ultralytics import YOLO, __version__
 from ultralytics.nn.modules import Detect, C2f, Conv, Bottleneck, C2f_v2
@@ -23,7 +26,7 @@ from ultralytics.nn.modules_deformable import TDetect
 from ultralytics.nn.tasks import attempt_load_one_weight
 from ultralytics.yolo.engine.model import TASK_MAP
 from ultralytics.yolo.engine.trainer import BaseTrainer
-from ultralytics.yolo.utils import yaml_load, LOGGER, RANK, DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS
+from ultralytics.yolo.utils import yaml_load, LOGGER, RANK, DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, TQDM_BAR_FORMAT, colorstr
 from ultralytics.yolo.utils.checks import check_yaml
 from ultralytics.yolo.utils.torch_utils import initialize_weights, de_parallel
 
@@ -139,28 +142,150 @@ def save_pruning_size_graph(x, y1, y2, dir=""): # sparities_list, no_params_list
     plt.title('Comparison of FLOPs and #Params with Pruning Ratio')
     plt.savefig(os.path.join(dir, f'pruning_size_change.png'))
 
+def _do_train_v2(self: BaseTrainer, world_size=1):
+        """Train completed, evaluate and plot if specified by arguments."""
+        if world_size > 1:
+            self._setup_ddp(world_size)
+
+        self._setup_train(world_size)
+
+        self.epoch_time = None
+        self.epoch_time_start = time.time()
+        self.train_time_start = time.time()
+        nb = len(self.train_loader)  # number of batches
+        nw = max(round(self.args.warmup_epochs * nb), 100)  # number of warmup iterations
+        last_opt_step = -1
+        # self.run_callbacks('on_train_start')
+        LOGGER.info(f'Image sizes {self.args.imgsz} train, {self.args.imgsz} val\n'
+                    f'Using {self.train_loader.num_workers * (world_size or 1)} dataloader workers\n'
+                    f"Logging results to {colorstr('bold', self.save_dir)}\n"
+                    f'Starting training for {self.epochs} epochs...')
+        if self.args.close_mosaic:
+            base_idx = (self.epochs - self.args.close_mosaic) * nb
+            self.plot_idx.extend([base_idx, base_idx + 1, base_idx + 2])
+        for epoch in range(self.start_epoch, self.epochs):
+            self.epoch = epoch
+            self.run_callbacks('on_train_epoch_start')
+            self.model.train()
+            if RANK != -1:
+                self.train_loader.sampler.set_epoch(epoch)
+            pbar = enumerate(self.train_loader)
+            # Update dataloader attributes (optional)
+            if epoch == (self.epochs - self.args.close_mosaic):
+                LOGGER.info('Closing dataloader mosaic')
+                if hasattr(self.train_loader.dataset, 'mosaic'):
+                    self.train_loader.dataset.mosaic = False
+                if hasattr(self.train_loader.dataset, 'close_mosaic'):
+                    self.train_loader.dataset.close_mosaic(hyp=self.args)
+
+            if RANK in (-1, 0):
+                LOGGER.info(self.progress_string())
+                pbar = tqdm(enumerate(self.train_loader), total=nb, bar_format=TQDM_BAR_FORMAT)
+            self.tloss = None
+            self.optimizer.zero_grad()
+            if self.pruner:
+                self.pruner.update_regularizor()
+
+            for i, batch in pbar:
+                self.run_callbacks('on_train_batch_start')
+                # Warmup
+                ni = i + nb * epoch
+                if ni <= nw:
+                    xi = [0, nw]  # x interp
+                    self.accumulate = max(1, np.interp(ni, xi, [1, self.args.nbs / self.batch_size]).round())
+                    for j, x in enumerate(self.optimizer.param_groups):
+                        # Bias lr falls from 0.1 to lr0, all other lrs rise from 0.0 to lr0
+                        x['lr'] = np.interp(
+                            ni, xi, [self.args.warmup_bias_lr if j == 0 else 0.0, x['initial_lr'] * self.lf(epoch)])
+                        if 'momentum' in x:
+                            x['momentum'] = np.interp(ni, xi, [self.args.warmup_momentum, self.args.momentum])
+
+                # Forward
+                with torch.cuda.amp.autocast(self.amp):
+                    # print(f'----------------{batch["img"].shape}-------------------')
+                    batch = self.preprocess_batch(batch)
+                    preds = self.model(batch['img']) # predict
+                    self.loss, self.loss_items = self.criterion(preds, batch) # cal loss
+                    if RANK != -1:
+                        self.loss *= world_size
+                    self.tloss = (self.tloss * i + self.loss_items) / (i + 1) if self.tloss is not None \
+                        else self.loss_items
+
+                # Backward
+                self.scaler.scale(self.loss).backward()
+
+                # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
+                if ni - last_opt_step >= self.accumulate:
+                    if self.pruner:
+                        self.pruner.regularize(self.model)
+                    self.optimizer_step()
+                    last_opt_step = ni
+
+                # Log
+                mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
+                loss_len = self.tloss.shape[0] if len(self.tloss.size()) else 1
+                losses = self.tloss if loss_len > 1 else torch.unsqueeze(self.tloss, 0)
+                if RANK in (-1, 0):
+                    pbar.set_description(
+                        ('%11s' * 2 + '%11.4g' * (2 + loss_len)) %
+                        (f'{epoch + 1}/{self.epochs}', mem, *losses, batch['cls'].shape[0], batch['img'].shape[-1]))
+                    self.run_callbacks('on_batch_end')
+                    if self.args.plots and ni in self.plot_idx:
+                        self.plot_training_samples(batch, ni)
+
+                self.run_callbacks('on_train_batch_end')
+
+            self.lr = {f'lr/pg{ir}': x['lr'] for ir, x in enumerate(self.optimizer.param_groups)}  # for loggers
+
+            self.scheduler.step()
+            self.run_callbacks('on_train_epoch_end')
+
+            if RANK in (-1, 0):
+
+                # Validation
+                self.ema.update_attr(self.model, include=['yaml', 'nc', 'args', 'names', 'stride', 'class_weights'])
+                final_epoch = (epoch + 1 == self.epochs) or self.stopper.possible_stop
+
+                if self.args.val or final_epoch:
+                    self.metrics, self.fitness = self.validate()
+                self.save_metrics(metrics={**self.label_loss_items(self.tloss), **self.metrics, **self.lr})
+                self.stop = self.stopper(epoch + 1, self.fitness)
+
+                # Save model
+                if self.args.save or (epoch + 1 == self.epochs):
+                    self.save_model()
+                    self.run_callbacks('on_model_save')
+
+            tnow = time.time()
+            self.epoch_time = tnow - self.epoch_time_start
+            self.epoch_time_start = tnow
+            self.run_callbacks('on_fit_epoch_end')
+            torch.cuda.empty_cache()  # clears GPU vRAM at end of epoch, can help with out of memory errors
+
+            # Early Stopping
+            if RANK != -1:  # if DDP training
+                broadcast_list = [self.stop if RANK == 0 else None]
+                dist.broadcast_object_list(broadcast_list, 0)  # broadcast 'stop' to all ranks
+                if RANK != 0:
+                    self.stop = broadcast_list[0]
+            if self.stop:
+                break  # must break all DDP ranks
+
+        if RANK in (-1, 0):
+            # Do final val with best.pt
+            LOGGER.info(f'\n{epoch - self.start_epoch + 1} epochs completed in '
+                        f'{(time.time() - self.train_time_start) / 3600:.3f} hours.')
+            self.final_eval()
+            if self.args.plots:
+                self.plot_metrics()
+            self.run_callbacks('on_train_end')
+        torch.cuda.empty_cache()
+        self.run_callbacks('teardown')
+
 def infer_shortcut(bottleneck):
     c1 = bottleneck.cv1.conv.in_channels
     c2 = bottleneck.cv2.conv.out_channels
     return c1 == c2 and hasattr(bottleneck, 'add') and bottleneck.add
-
-
-# class C2f_v2(nn.Module):
-#     # CSP Bottleneck with 2 convolutions
-#     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
-#         super().__init__()
-#         self.c = int(c2 * e)  # hidden channels
-#         self.cv0 = Conv(c1, self.c, 1, 1)
-#         self.cv1 = Conv(c1, self.c, 1, 1)
-#         self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
-#         self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
-
-#     def forward(self, x):
-#         # y = list(self.cv1(x).chunk(2, 1))
-#         y = [self.cv0(x), self.cv1(x)]
-#         y.extend(m(y[-1]) for m in self.m)
-#         return self.cv2(torch.cat(y, 1))
-
 
 def transfer_weights(c2f, c2f_v2):
     c2f_v2.cv2 = c2f.cv2
@@ -266,7 +391,7 @@ def strip_optimizer_v2(f: Union[str, Path] = 'best.pt', s: str = '') -> None:
     mb = os.path.getsize(s or f) / 1E6  # filesize
     LOGGER.info(f"Optimizer stripped from {f},{f' saved as {s},' if s else ''} {mb:.1f}MB")
 
-def train_v2(self: YOLO, pruning=False, **kwargs):
+def train_v2(self: YOLO, pruning=False, pruner=None, **kwargs):
     """
     Disabled loading new model when pruning flag is set. originated from ultralytics/yolo/engine/model.py
     """
@@ -294,15 +419,15 @@ def train_v2(self: YOLO, pruning=False, **kwargs):
         if not overrides.get('resume'):  # manually set model only if not resuming
             self.trainer.model = self.trainer.get_model(weights=self.model if self.ckpt else None, cfg=self.model.yaml)
             self.model = self.trainer.model
-
     else:
         # pruning mode
         self.trainer.pruning = True
         self.trainer.model = self.model
-
+        self.trainer.pruner = pruner
         # replace some functions to disable half precision saving
         self.trainer.save_model = save_model_v2.__get__(self.trainer)
         self.trainer.final_eval = final_eval_v2.__get__(self.trainer)
+        self.trainer._do_train = _do_train_v2.__get__(self.trainer)
 
     self.trainer.hub_session = self.session  # attach optional HUB session
     self.trainer.train()
@@ -395,17 +520,20 @@ def prune(args):
         ignored_layers = []
         unwrapped_parameters = []
         for m in model.model.modules():
+            # if isinstance(m, (Detect,)):
+            #     for modulelist in m.cv2:
+            #         ignored_layers.append(modulelist[-1])
+            #     for modulelist in m.cv3:
+            #         ignored_layers.append(modulelist[-1])
             if isinstance(m, (Detect,)):
-                for modulelist in m.cv2:
-                    ignored_layers.append(modulelist[-1])
-                for modulelist in m.cv3:
-                    ignored_layers.append(modulelist[-1])
+                ignored_layers.append(m)
+                break
         
         example_inputs = example_inputs.to(model.device)
-        pruner = tp.pruner.MagnitudePruner(
+        pruner = tp.pruner.GroupNormPruner(
             model.model,
             example_inputs,
-            global_pruning = True, # additional test
+            global_pruning = False, # additional test
             importance=tp.importance.MagnitudeImportance(p=2),  # L2 norm pruning,
             iterative_steps=1,
             ch_sparsity=ch_sparsity,
@@ -430,7 +558,8 @@ def prune(args):
             param.requires_grad = True
         pruning_cfg['name'] = os.path.join(prefix_folder, f"step_{i}_finetune")
         pruning_cfg['batch'] = batch_size  # restore batch size
-        model.train_v2(pruning=True, **pruning_cfg)
+        # pass pruner if sparse training
+        model.train_v2(pruning=True, pruner = pruner if args.sparse_training else None, **pruning_cfg)
 
         # post fine-tuning validation
         pruning_cfg['name'] = os.path.join(prefix_folder, f"step_{i}_post_val")
@@ -471,6 +600,7 @@ if __name__ == "__main__":
     parser.add_argument('--iterative-steps', default=16, type=int, help='Total pruning iteration step')
     parser.add_argument('--target-prune-rate', default=0.5, type=float, help='Target pruning rate')
     parser.add_argument('--max-map-drop', default=0.2, type=float, help='Allowed maximum map drop after fine-tuning')
+    parser.add_argument('--sparse-training', default=False, type=bool, help='Sparse training')
 
     parser.add_argument('--batch', default=4, type=int, help='batch_size')
     parser.add_argument('--data', default='coco128.yaml', help='dataset')
@@ -486,6 +616,5 @@ if __name__ == "__main__":
     os.makedirs(args.project, exist_ok=True)
     k = os.listdir(args.project)
     args.no_runs = len(k)
-    
-    
+
     prune(args)

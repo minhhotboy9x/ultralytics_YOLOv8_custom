@@ -11,26 +11,44 @@ from ultralytics.yolo.cfg import get_cfg
 import onnx
 from torch.onnx import export
 import onnxruntime
+from torch.quantization import QConfig
+
+class Model(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.quant = torch.quantization.QuantStub()
+        self.conv = nn.Conv2d(3, 3, 3)
+        self.act = nn.ReLU()
+        self.dequant = torch.quantization.DeQuantStub()
+    
+    def forward(self, x):
+        x = self.quant(x)
+        print('1: ', x[0, 0])
+        x = self.conv(x)
+        print('2: ', x[0, 0])
+        x = self.act(x)
+        print('3', x[0, 0])
+        x = self.dequant(x)
+        print('4', x[0, 0])
+        return x
 
 if __name__ == "__main__":
-    model_yolo = YOLO('asset/trained_model/UA-DETRAC/v8m_UA_DETRAC.pt')
-    model = torch.jit.load('asset/trained_model/UA-DETRAC/v8n_UA_DETRAC_default_ptq.torchscript')
-    # print(model)
-    input = torch.randn(1, 3, 640, 640)
-    export(model, input, "yolov8s.onnx", opset_version=17)
+    model = Model()
+    # Thiết lập QConfig cho quantize đầu vào
+    qconfig = QConfig(activation=torch.quantization.HistogramObserver.with_args(reduce_range=True, qscheme=torch.per_tensor_symmetric),
+                                weight=torch.quantization.PerChannelMinMaxObserver.with_args(ch_axis=0, dtype=torch.qint8, qscheme=torch.per_channel_symmetric)
+                            )
+    model.qconfig = qconfig
+    # torch.quantization.fuse_modules(model, [['conv', 'act']], inplace=True)
+    example_input = torch.randn(1, 3, 5, 5)
+    print(example_input)
+    torch.quantization.prepare(model, inplace=True)
+    model(example_input)
+    torch.quantization.convert(model, inplace=True)
+    print(model)
+    print(model.conv.weight())
+    print('----------------')
+    print(model(example_input))
 
-    print(model(input).shape)    
-    print(model_yolo.model(input)[0].shape)    
 
-    input_data = np.random.randn(1, 3, 640, 640).astype(np.float32)
-    ort_session = onnxruntime.InferenceSession("yolov8s.onnx")
-    onnx_model = onnx.load("yolov8s.onnx")
 
-    # List all input names
-    input_names = [input.name for input in onnx_model.graph.input]
-    print("Input names:", input_names)
-
-    output = ort_session.run(None, {'x.3': input_data})
-    print(output[0].shape)
-    # yolo_obj = YOLO(r'quantizing\train3\weights\quantized_model_jit.torchscript', task='detect')
-    # yolo_obj.val(data = 'coco128.yaml', device='cpu')

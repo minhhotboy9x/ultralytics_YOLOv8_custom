@@ -74,7 +74,7 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
             dump_image = torch.zeros((1, 3, self.args.imgsz, self.args.imgsz), device=self.device)
 
             _, features = self.model(dump_image, mask_id = mask_id)  # forward
-            _, teacher_feature= self.teacher(dump_image, mask_id = mask_id) 
+            _, teacher_feature = self.teacher(dump_image, mask_id = mask_id) 
 
             for i in range(len(features)):
                 _, student_channel, student_out_size, _ = features[i].shape

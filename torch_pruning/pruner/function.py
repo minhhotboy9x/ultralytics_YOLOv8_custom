@@ -1,14 +1,10 @@
 import torch
 import torch.nn as nn
+from copy import deepcopy
+from abc import ABC, abstractclassmethod
+from typing import Sequence, Tuple
 
 from .. import ops
-
-from copy import deepcopy
-from functools import reduce
-from operator import mul
-
-from abc import ABC, abstractclassmethod, abstractmethod, abstractstaticmethod
-from typing import Callable, Sequence, Tuple, Dict
 
 __all__=[
     'BasePruningFunc',
@@ -108,7 +104,7 @@ class BasePruningFunc(ABC):
         return 1
 
     def _prune_parameter_and_grad(self, weight, keep_idxs, pruning_dim):
-        pruned_weight = torch.nn.Parameter(torch.index_select(weight, pruning_dim, torch.LongTensor(keep_idxs).to(weight.device)))
+        pruned_weight = torch.nn.Parameter(torch.index_select(weight, pruning_dim, torch.LongTensor(keep_idxs).to(weight.device).contiguous()))
         if weight.grad is not None:
             pruned_weight.grad = torch.index_select(weight.grad, pruning_dim, torch.LongTensor(keep_idxs).to(weight.device))
         return pruned_weight.to(weight.device)
@@ -246,7 +242,8 @@ class LayernormPruner(BasePruningFunc):
         keep_idxs.sort()
         if layer.elementwise_affine:
             layer.weight = self._prune_parameter_and_grad(layer.weight, keep_idxs, pruning_dim)
-            layer.bias = self._prune_parameter_and_grad(layer.bias, keep_idxs, pruning_dim)
+            if layer.bias is not None:
+                layer.bias = self._prune_parameter_and_grad(layer.bias, keep_idxs, pruning_dim)
         if pruning_dim != -1:
             layer.normalized_shape = layer.normalized_shape[:pruning_dim] + (
                 keep_idxs.size(0), ) + layer.normalized_shape[pruning_dim+1:]

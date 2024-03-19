@@ -38,25 +38,37 @@ def calibration(model, args):
                              rect=False, data_info=data)[0]
     nb = len(train_loader)
     print('--------Calibration start--------')
-    pbar = tqdm(enumerate(islice(train_loader, nb)), total=nb, bar_format=TQDM_BAR_FORMAT)
-    for i, batch in pbar:
-        batch = preprocess_batch(batch, device)
-        model(batch['img'])
+    pbar = tqdm(enumerate(islice(train_loader, 100)), total=nb, bar_format=TQDM_BAR_FORMAT)
+    with torch.no_grad():
+        for i, batch in pbar:
+            batch = preprocess_batch(batch, device)
+            model(batch['img'])
     print('--------Calibration done---------')
 
 def main(args):
     args = get_cfg(DEFAULT_CFG, vars(args))
     model = YOLO(args.model, task='detect')
-    detect_model = model.model
+    detect_model = model.model.eval()
+
     replace_conv_with_qconv_v2_ptq(detect_model)
+    # print('Before quantization:')
+    # metrics = model.val(data=args.data, batch=args.batch, device=args.device, split='test')
+    
     torch.quantization.prepare(detect_model, inplace=True)
+    # print(detect_model)
+    
     calibration(detect_model, args)
     detect_model = detect_model.cpu()
     torch.quantization.convert(detect_model, inplace=True)
-    metrics = model.val(data=args.data, batch=args.batch, device='cpu')
+    print(detect_model)
+    metrics = model.val(data=args.data, batch=args.batch, device='cpu', split='test')
     print('-----------------------')
     model.info()
     print(metrics)
+
+    state_dict_path =  args.model + 'h'
+    torch.save(model.model.state_dict(), state_dict_path)
+
     model.export()
 
 if __name__ == '__main__':

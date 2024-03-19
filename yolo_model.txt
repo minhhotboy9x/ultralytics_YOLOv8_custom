@@ -1,24 +1,127 @@
-                   from  n    params  module                                       arguments                     
-  0                  -1  1       464  ultralytics.nn.modules.Conv                  [3, 16, 3, 2]                 
-  1                  -1  1      4672  ultralytics.nn.modules.Conv                  [16, 32, 3, 2]                
-  2                  -1  1      7360  ultralytics.nn.modules.C2f                   [32, 32, 1, True]             
-  3                  -1  1     18560  ultralytics.nn.modules.Conv                  [32, 64, 3, 2]                
-  4                  -1  2     49664  ultralytics.nn.modules.C2f                   [64, 64, 2, True]             
-  5                  -1  1     73984  ultralytics.nn.modules.Conv                  [64, 128, 3, 2]               
-  6                  -1  2    197632  ultralytics.nn.modules.C2f                   [128, 128, 2, True]           
-  7                  -1  1    295424  ultralytics.nn.modules.Conv                  [128, 256, 3, 2]              
-  8                  -1  1    460288  ultralytics.nn.modules.C2f                   [256, 256, 1, True]           
-  9                  -1  1    164608  ultralytics.nn.modules.SPPF                  [256, 256, 5]                 
- 10                  -1  1         0  torch.nn.modules.upsampling.Upsample         [None, 2, 'nearest']          
- 11             [-1, 6]  1         0  ultralytics.nn.modules.Concat                [1]                           
- 12                  -1  1    148224  ultralytics.nn.modules.C2f                   [384, 128, 1]                 
- 13                  -1  1         0  torch.nn.modules.upsampling.Upsample         [None, 2, 'nearest']          
- 14             [-1, 4]  1         0  ultralytics.nn.modules.Concat                [1]                           
- 15                  -1  1     74304  ultralytics.nn.modules.C2f                   [192, 96, 1]                  
- 16                  -1  1     55424  ultralytics.nn.modules.Conv                  [96, 64, 3, 2]                
- 17            [-1, 12]  1         0  ultralytics.nn.modules.Concat                [1]                           
- 18                  -1  1    259200  ultralytics.nn.modules.C2f                   [192, 192, 1]                 
- 19                  -1  1    221440  ultralytics.nn.modules.Conv                  [192, 128, 3, 2]              
- 20             [-1, 9]  1         0  ultralytics.nn.modules.Concat                [1]                           
- 21                  -1  1    493056  ultralytics.nn.modules.C2f                   [384, 256, 1]                 
- 22        [15, 18, 21]  1   1158364  ultralytics.nn.modules.Detect                [4, [96, 192, 256]]   
+model.0.quant.scale
+model.0.quant.zero_point
+model.1.quant.scale
+model.1.quant.zero_point
+model.2.cv1.quant.scale
+model.2.cv1.quant.zero_point
+model.2.cv2.quant.scale
+model.2.cv2.quant.zero_point
+model.2.m.0.cv1.quant.scale
+model.2.m.0.cv1.quant.zero_point
+model.2.m.0.cv2.quant.scale
+model.2.m.0.cv2.quant.zero_point
+model.3.quant.scale
+model.3.quant.zero_point
+model.4.cv1.quant.scale
+model.4.cv1.quant.zero_point
+model.4.cv2.quant.scale
+model.4.cv2.quant.zero_point
+model.4.m.0.cv1.quant.scale
+model.4.m.0.cv1.quant.zero_point
+model.4.m.0.cv2.quant.scale
+model.4.m.0.cv2.quant.zero_point
+model.4.m.1.cv1.quant.scale
+model.4.m.1.cv1.quant.zero_point
+model.4.m.1.cv2.quant.scale
+model.4.m.1.cv2.quant.zero_point
+model.5.quant.scale
+model.5.quant.zero_point
+model.6.cv1.quant.scale
+model.6.cv1.quant.zero_point
+model.6.cv2.quant.scale
+model.6.cv2.quant.zero_point
+model.6.m.0.cv1.quant.scale
+model.6.m.0.cv1.quant.zero_point
+model.6.m.0.cv2.quant.scale
+model.6.m.0.cv2.quant.zero_point
+model.6.m.1.cv1.quant.scale
+model.6.m.1.cv1.quant.zero_point
+model.6.m.1.cv2.quant.scale
+model.6.m.1.cv2.quant.zero_point
+model.7.quant.scale
+model.7.quant.zero_point
+model.8.cv1.quant.scale
+model.8.cv1.quant.zero_point
+model.8.cv2.quant.scale
+model.8.cv2.quant.zero_point
+model.8.m.0.cv1.quant.scale
+model.8.m.0.cv1.quant.zero_point
+model.8.m.0.cv2.quant.scale
+model.8.m.0.cv2.quant.zero_point
+model.9.cv1.quant.scale
+model.9.cv1.quant.zero_point
+model.9.cv2.quant.scale
+model.9.cv2.quant.zero_point
+model.12.cv1.quant.scale
+model.12.cv1.quant.zero_point
+model.12.cv2.quant.scale
+model.12.cv2.quant.zero_point
+model.12.m.0.cv1.quant.scale
+model.12.m.0.cv1.quant.zero_point
+model.12.m.0.cv2.quant.scale
+model.12.m.0.cv2.quant.zero_point
+model.15.cv1.quant.scale
+model.15.cv1.quant.zero_point
+model.15.cv2.quant.scale
+model.15.cv2.quant.zero_point
+model.15.m.0.cv1.quant.scale
+model.15.m.0.cv1.quant.zero_point
+model.15.m.0.cv2.quant.scale
+model.15.m.0.cv2.quant.zero_point
+model.16.quant.scale
+model.16.quant.zero_point
+model.18.cv1.quant.scale
+model.18.cv1.quant.zero_point
+model.18.cv2.quant.scale
+model.18.cv2.quant.zero_point
+model.18.m.0.cv1.quant.scale
+model.18.m.0.cv1.quant.zero_point
+model.18.m.0.cv2.quant.scale
+model.18.m.0.cv2.quant.zero_point
+model.19.quant.scale
+model.19.quant.zero_point
+model.21.cv1.quant.scale
+model.21.cv1.quant.zero_point
+model.21.cv2.quant.scale
+model.21.cv2.quant.zero_point
+model.21.m.0.cv1.quant.scale
+model.21.m.0.cv1.quant.zero_point
+model.21.m.0.cv2.quant.scale
+model.21.m.0.cv2.quant.zero_point
+model.22.cv2.0.0.conv.weight
+model.22.cv2.0.0.conv.bias
+model.22.cv2.0.1.conv.weight
+model.22.cv2.0.1.conv.bias
+model.22.cv2.0.2.weight
+model.22.cv2.0.2.bias
+model.22.cv2.1.0.conv.weight
+model.22.cv2.1.0.conv.bias
+model.22.cv2.1.1.conv.weight
+model.22.cv2.1.1.conv.bias
+model.22.cv2.1.2.weight
+model.22.cv2.1.2.bias
+model.22.cv2.2.0.conv.weight
+model.22.cv2.2.0.conv.bias
+model.22.cv2.2.1.conv.weight
+model.22.cv2.2.1.conv.bias
+model.22.cv2.2.2.weight
+model.22.cv2.2.2.bias
+model.22.cv3.0.0.conv.weight
+model.22.cv3.0.0.conv.bias
+model.22.cv3.0.1.conv.weight
+model.22.cv3.0.1.conv.bias
+model.22.cv3.0.2.weight
+model.22.cv3.0.2.bias
+model.22.cv3.1.0.conv.weight
+model.22.cv3.1.0.conv.bias
+model.22.cv3.1.1.conv.weight
+model.22.cv3.1.1.conv.bias
+model.22.cv3.1.2.weight
+model.22.cv3.1.2.bias
+model.22.cv3.2.0.conv.weight
+model.22.cv3.2.0.conv.bias
+model.22.cv3.2.1.conv.weight
+model.22.cv3.2.1.conv.bias
+model.22.cv3.2.2.weight
+model.22.cv3.2.2.bias
+model.22.dfl.conv.weight

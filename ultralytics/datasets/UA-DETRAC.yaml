@@ -1,8 +1,7 @@
-
 path: ../datasets/UA-DETRAC # dataset root dir
-train: images/train  # train images (relative to 'path') 118287 images
-val: images/val  # val images (relative to 'path') 5000 images
-test: images/val  # 20288 of 40670 images, submit to https://competitions.codalab.org/competitions/20794
+train: images/train  
+val: images/val  
+test: images/test  
 
 # Classes
 names:

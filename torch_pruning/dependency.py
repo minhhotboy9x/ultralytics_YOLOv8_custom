@@ -9,7 +9,7 @@ from . import _helpers, utils, ops
 __all__ = ["Dependency", "Group", "DependencyGraph"]
 
 INDEX_MAPPING_PLACEHOLDER = None
-MAX_RECURSION_DEPTH = 100
+MAX_RECURSION_DEPTH = 500
 
 class Node(object):
     """ Node of DepGraph
@@ -276,7 +276,8 @@ class DependencyGraph(object):
         self.REGISTERED_PRUNERS = function.PrunerBox.copy()  # shallow copy
         self.REGISTERED_PRUNERS.update(_dummy_pruners) # merge dummy pruners
         self.CUSTOMIZED_PRUNERS = {} # user-customized pruners
-        self.IGNORED_LAYERS = []
+
+        self.IGNORED_LAYERS_IN_TRACING = []
 
         # cache pruning functions for fast lookup
         self._in_channel_pruning_fn = set([p.prune_in_channels for p in self.REGISTERED_PRUNERS.values() if p is not None] + [p.prune_in_channels for p in self.CUSTOMIZED_PRUNERS.values() if p is not None])
@@ -312,6 +313,8 @@ class DependencyGraph(object):
         output_transform: typing.Callable = None,
         unwrapped_parameters: typing.Dict[nn.Parameter, int] = None,
         customized_pruners: typing.Dict[ typing.Union[typing.Any, torch.nn.Module],function.BasePruningFunc] = None,
+        ignored_layers: typing.List[nn.Module] = None,
+        ignored_params: typing.List[nn.Parameter] = None,
         verbose: bool = True,
     ) -> "DependencyGraph":
         """Build a dependency graph through tracing.
@@ -322,6 +325,8 @@ class DependencyGraph(object):
             output_transform (Callable): a function to transform network outputs.
             unwrapped_parameters (typing.Dict[nn.Parameter, int]): unwrapped nn.parameters that do not belong to standard nn.Module.
             customized_pruners (typing.Dict[ typing.Union[typing.Any, torch.nn.Module],function.BasePruningFunc]): customized pruners for a specific layer type or a specific layer instance.
+            ignored_layers (typing.List[nn.Module]): ignored layers that will not be traced in the dependency graph.
+            ignored_params (typing.List[nn.Parameter]): ignored nn.Parameter that will not be pruned.
             verbose (bool): verbose mode.
         """
 
@@ -334,20 +339,23 @@ class DependencyGraph(object):
             for customized_type, customized_pruner in customized_pruners.items():
                 self.register_customized_layer(customized_type, customized_pruner)
         
-        # Ignore all sub-modules of customized layers as they will be handled by the customized pruners
+        if ignored_layers is not None:
+            self.IGNORED_LAYERS_IN_TRACING.extend(ignored_layers)
+        self.ignored_params = ignored_params
+        # Ignore all sub-modules of customized layers since they will be handled by the customized pruner
         for layer_type_or_instance in self.CUSTOMIZED_PRUNERS.keys():            
             for m in self.model.modules():
                 # a layer instance or a layer type
                 if (m==layer_type_or_instance) or (not isinstance(layer_type_or_instance, torch.nn.Module) and isinstance(m, layer_type_or_instance)):
                     for sub_module in m.modules(): 
                         if sub_module != m:
-                            self.IGNORED_LAYERS.append(sub_module)
+                            self.IGNORED_LAYERS_IN_TRACING.append(sub_module)
 
-        # Detect unwrapped nn.parameters
+        # Detect unwrapped nn.parameters that can not be handled by self.REGISTED_PRUNERS
         self._param_to_name, self.unwrapped_parameters = self._detect_unwrapped_parameters(unwrapped_parameters)
 
         # Detect torch.no_grad()
-        assert torch.is_grad_enabled(), "Dependency graph relies on autograd for tracing. Please make sure there is no torch.no_grad() in your code."
+        assert torch.is_grad_enabled(), "Dependency graph relies on autograd for tracing. Please check and disable the torch.no_grad() in your code."
         
         # Build computational graph through tracing. 
         self.module2node = self._trace(
@@ -357,7 +365,7 @@ class DependencyGraph(object):
         # Build dependency graph
         self._build_dependency(self.module2node)
         
-        # Init Shape information
+        # Initialize shape information
         self._init_shape_information()
 
         # Update index mapping for torch.cat/split/chunck/...
@@ -385,7 +393,6 @@ class DependencyGraph(object):
         Args:
             group (Group): a depenedency group
         """
-
         for dep, idxs in group:
             if self.is_out_channel_pruning_fn(dep.handler):
                 prunable_chs = self.get_out_channels(
@@ -414,12 +421,19 @@ class DependencyGraph(object):
         pruning_fn: typing.Callable,
         idxs: typing.Sequence[int],
     ) -> Group:
-        """Get the pruning group of pruning_fn.
-        Args:
-            module (nn.Module): the to-be-pruned module/layer.
-            pruning_fn (Callable): the pruning function.
-            idxs (list or tuple): the indices of channels/dimensions.
-            grouped_idxs (bool): whether the indices are grouped. If True, idxs is a list of list, e.g., [[0,1,2], [3,4,5]], where each sublist is a group.
+        """
+        Get the pruning group for a given module.
+
+            Args:
+                module (nn.Module): The module to be pruned.
+                pruning_fn (Callable): The pruning function.
+                idxs (list or tuple): The indices of channels/dimensions.
+
+            Returns:
+                Group: The pruning group containing the dependencies and indices.
+
+            Raises:
+                ValueError: If the module is not in the dependency graph.
         """
         if module not in self.module2node:
             raise ValueError(
@@ -474,6 +488,14 @@ class DependencyGraph(object):
         # merge pruning ops
         merged_group = Group()
         for dep, idxs in group.items:
+            if isinstance(dep.target.module, nn.Parameter): #and dep.target.module in self.ignored_params:
+                skip=False
+                for ignored_p in self.ignored_params:
+                    if dep.target.module is ignored_p:
+                        skip=True
+                        break
+                if skip:
+                    continue
             merged_group.add_and_merge(dep, idxs)
         merged_group._DG = self
         for i in range(len(merged_group)):
@@ -485,17 +507,33 @@ class DependencyGraph(object):
         return merged_group
 
     def get_all_groups(self, ignored_layers=[], root_module_types=(ops.TORCH_CONV, ops.TORCH_LINEAR)):
+        """
+            Get all pruning groups for the given module. Groups are generated on the module typs specified in root_module_types.
+
+            Args:
+                ignored_layers (list): List of layers to be ignored during pruning.
+                root_module_types (tuple): Tuple of root module types to consider for pruning.
+
+            Yields:
+                list: A pruning group containing dependencies and their corresponding pruning handlers.
+
+            Example:
+            ```python
+            for group in DG.get_all_groups(ignored_layers=[layer1, layer2], root_module_types=[nn.Conv2d]):
+                print(group)
+            ```
+        """
         visited_layers = []
-        ignored_layers = ignored_layers+self.IGNORED_LAYERS
+        ignored_layers = ignored_layers+self.IGNORED_LAYERS_IN_TRACING
 
         for m in list(self.module2node.keys()):
- 
+            
             if m in ignored_layers:
                 continue
-
+            
             if not isinstance(m, tuple(root_module_types)):
                 continue
-     
+
             pruner = self.get_pruner_of_module(m)
             if pruner is None or pruner.get_out_channels(m) is None:
                 continue
@@ -676,6 +714,7 @@ class DependencyGraph(object):
         visited = {}
         self._2d_4d = True # only for pytorch<=1.8
         def _record_grad_fn(module, inputs, outputs):
+            
             if module not in visited:
                 visited[module] = 1
             else:
@@ -688,7 +727,9 @@ class DependencyGraph(object):
                 outputs = outputs[0]
             if isinstance(outputs, torch.nn.utils.rnn.PackedSequence):
                 outputs = outputs.data
+
             gradfn2module[outputs.grad_fn] = module
+            
 
         # Register hooks for prunable modules
         registered_types = tuple(ops.type2class(
@@ -696,7 +737,7 @@ class DependencyGraph(object):
         hooks = [
             m.register_forward_hook(_record_grad_fn)
             for m in model.modules()
-            if (isinstance(m, registered_types) and m not in self.IGNORED_LAYERS)
+            if (isinstance(m, registered_types) and m not in self.IGNORED_LAYERS_IN_TRACING)
         ]
 
         # Feed forward to record gradient functions of prunable modules
@@ -714,12 +755,11 @@ class DependencyGraph(object):
 
         # for recursive models or layers
         reused = [m for (m, count) in visited.items() if count > 1]
-
-        # Graph tracing
         if output_transform is not None:
             out = output_transform(out)
-        module2node = {} # create a mapping from nn.Module to tp.dependency.Node
 
+        # Graph tracing
+        module2node = {} # create a mapping from nn.Module to tp.dependency.Node
         visited = set()
         for o in utils.flatten_as_list(out):
             self._trace_computational_graph(
@@ -830,7 +870,8 @@ class DependencyGraph(object):
 
         
         for (param, dim) in self.unwrapped_parameters:
-            module2node[param].pruning_dim = dim
+            if param in module2node:
+                module2node[param].pruning_dim = dim
         return module2node
 
     def update_index_mapping(self):
@@ -849,11 +890,13 @@ class DependencyGraph(object):
 
     def _init_shape_information(self):
         for module, node in self.module2node.items():
-            
+
             if node.type == ops.OPTYPE.SPLIT:
                 grad_fn = node.grad_fn
-                if hasattr(grad_fn, '_saved_self_sizes'):
+
+                if hasattr(grad_fn, '_saved_self_sizes') or hasattr(grad_fn, '_saved_split_sizes'):
                     MAX_LEGAL_DIM = 100
+                    
                     if hasattr(grad_fn, '_saved_split_sizes') and hasattr(grad_fn, '_saved_dim') :
                         if grad_fn._saved_dim != 1 and grad_fn._saved_dim < MAX_LEGAL_DIM: # a temp fix for pytorch==1.11, where the _saved_dim is an uninitialized value like 118745347895359
                             continue
@@ -1036,6 +1079,7 @@ class DependencyGraph(object):
             return 
         
         offsets = split_node.module.offsets
+
         if offsets is None:
             return
         addressed_dep = []
@@ -1114,8 +1158,3 @@ class DependencyGraph(object):
         recursive_depth = [0]
         return self._infer_out_channels_recursively(node_1, recursive_depth)
 
-        
-
-
-
-        

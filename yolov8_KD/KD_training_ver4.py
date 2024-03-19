@@ -85,7 +85,7 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
             _, teacher_channel, teacher_out_size, _ = teacher_feature[i].shape
             stu_feature_adapts.append(nn.Sequential(nn.Conv2d(student_channel, teacher_channel, 1,
                                                     padding=0, stride=1, bias=False),
-                                                    nn.SiLU()).to(self.device))
+                                                    nn.ReLU()).to(self.device))
         if self.args.train_adapter:
             self.add_params_kd(stu_feature_adapts)
 
@@ -347,7 +347,7 @@ if __name__ == "__main__":
     parser.add_argument('--imgsz', type=int, default=640, help='Size of input images')
     parser.add_argument('--workers', type=int, default=4, help="number of worker threads for data loading (per RANK if DDP)")
     parser.add_argument('--resume', type=bool, default=False, help="continue training (if KD, must provide teacher)")
-    parser.add_argument('--lr0', type=float, default=0.01, help="initial learning rate (i.e. SGD=1E-2, Adam=1E-3)")  
+    parser.add_argument('--lr0', type=float, default=0.01, help="initial learning rate (i.e. SGD=1E-2, Adam=1E-3)")
     parser.add_argument('--train_adapter', type=bool, default=False, help='enable training feature adaptation or not')
 
     args = parser.parse_args()

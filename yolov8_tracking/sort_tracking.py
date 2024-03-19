@@ -11,7 +11,7 @@ SIZE = (960, 540)
 # tracker = Sort()
 
 
-image = Image.open('MVI_40141_img00268.jpg')
+image = Image.open('MVI_40793_img01356.jpg')
 
 # Tạo đối tượng ImageDraw để vẽ lên ảnh
 draw = ImageDraw.Draw(image)
@@ -21,7 +21,7 @@ draw = ImageDraw.Draw(image)
 model = YOLO('/home/minhnq/ultralytics/runs/detect/train17/weights/best.pt', task='detect')
 # model.export(format = 'onnx')
 
-results = model.predict('MVI_40141_img00268.jpg', device=2)
+results = model.predict('MVI_40793_img01356.jpg', device=2)
 # Mở ảnh sử dụng thư viện Pillow
 
 

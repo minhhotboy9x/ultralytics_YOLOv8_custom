@@ -8,7 +8,7 @@ from ultralytics.yolo.engine.model import TASK_MAP
 from ultralytics.yolo.engine.trainer import BaseTrainer
 from ultralytics.yolo.utils import (yaml_load, LOGGER, RANK, DEFAULT_CFG_DICT, TQDM_BAR_FORMAT, 
                             DEFAULT_CFG_KEYS, DEFAULT_CFG, callbacks, clean_url, colorstr, emojis, yaml_save)
-from pytorch_msssim import ssim
+from kornia.losses import ssim_loss
 from utils import GetKeyRegion
 ultralytics_dir = os.path.abspath("./")
 
@@ -105,7 +105,7 @@ class DSSIMLoss(nn.Module):
         t_loss = 0
         for i in range(len(y_pred)):
             y_pred_scaled, y_true_scaled = self.scaler(y_pred[i], y_true[i])
-            loss = ssim(y_pred_scaled, y_true_scaled, data_range=1.0)
+            loss = ssim_loss(y_pred_scaled, y_true_scaled)
             loss = (1-loss)/2
             t_loss += loss
         t_loss /= len(y_pred)
@@ -120,8 +120,7 @@ class DSSIM(nn.Module):
 
     def forward(self, y_pred, y_true): 
         y_pred_scaled, y_true_scaled = self.scaler(y_pred, y_true)
-        loss = ssim(y_pred_scaled, y_true_scaled, data_range=1.0)
-        loss = (1-loss)/2
+        loss = ssim_loss(y_pred_scaled, y_true_scaled, window_size=11)
         # print(f'------------{type(loss)}--------------')
         return loss
 
