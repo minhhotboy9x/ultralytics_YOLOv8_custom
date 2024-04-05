@@ -1,0 +1,16 @@
+
+path: ../datasets/DETRAC_fix_roi # dataset root dir
+train: images/train  
+val: images/val  
+test: images/test  
+
+# Classes
+names:
+  0: bicycle
+  1: motorcycle
+  2: car
+  3: transporter (van)
+  4: bus
+  5: truck (others)
+  6: trailer
+  7: unknown

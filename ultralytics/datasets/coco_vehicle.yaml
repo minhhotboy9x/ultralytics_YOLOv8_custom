@@ -1,0 +1,12 @@
+path: ../datasets/coco_vehicle
+test: images/test/
+train: images/train/
+val: images/val/
+
+names:
+  0: bicycle
+  1: car
+  2: motorcycle
+  3: bus
+  4: truck
+

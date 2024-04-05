@@ -167,8 +167,6 @@ class LayerAttention(nn.Module):
         super().__init__()
         self.cross_layer = nn.Sequential(
             nn.Linear(c_hidden*N, N),
-            nn.ReLU(),
-            nn.Linear(N, N),
             nn.Sigmoid()
         )
     def forward(self, x): # input X_inter from feature extractor, ouput X_task

@@ -28,6 +28,7 @@ results = model.predict('MVI_40793_img01356.jpg', device=2)
 for result in results:
     print('----------')
     res = result.boxes
+    
     for cls, box_xyxy, box_xywh in zip(res.cls.tolist(), res.xyxy.tolist(), res.xywh.tolist()):
         # x = SIZE[0]*box[0]
         # w = SIZE[0]*box[2]

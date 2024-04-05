@@ -86,10 +86,10 @@ def replace_conv_with_qconv_v2_ptq(module):
                                 conv2d.stride, conv2d.padding, conv2d.groups, conv2d.dilation[0], child_module.act)
             qconv = Q_Conv(c1, c2, k, s, p=p, g=g, d=d, act=act)
             qconfig = QConfig(activation=quantization.HistogramObserver.with_args(reduce_range=True, qscheme=torch.per_tensor_affine),
-                                weight=quantization.MinMaxObserver.with_args(dtype=torch.qint8, qscheme=torch.per_tensor_affine)
+                                weight=quantization.MinMaxObserver.with_args(dtype=torch.qint8, qscheme=torch.per_tensor_symmetric)
                             )
 
-            # qconfig = quantization.get_default_qat_qconfig()
+            # qconfig = quantization.get_default_qconfig()
             qconv.qconfig = qconfig
             setattr(module, name, qconv)
             qconv.eval()

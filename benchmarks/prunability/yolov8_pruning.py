@@ -520,14 +520,8 @@ def prune(args):
         ignored_layers = []
         unwrapped_parameters = []
         for m in model.model.modules():
-            # if isinstance(m, (Detect,)):
-            #     for modulelist in m.cv2:
-            #         ignored_layers.append(modulelist[-1])
-            #     for modulelist in m.cv3:
-            #         ignored_layers.append(modulelist[-1])
             if isinstance(m, (Detect,)):
                 ignored_layers.append(m)
-                break
         
         example_inputs = example_inputs.to(model.device)
         pruner = tp.pruner.GroupNormPruner(
@@ -608,7 +602,7 @@ if __name__ == "__main__":
     parser.add_argument('--project', default='pruning', help='project name')
     parser.add_argument('--epochs', type=int, default=10, help='epochs each iterative-steps')
     parser.add_argument('--imgsz', type=int, default=640, help='Size of input images')
-    parser.add_argument('--lr0', type=float, default=0.0001, help='Inintial learning rate')
+    parser.add_argument('--lr0', type=float, default=0.0005, help='Inintial learning rate')
     parser.add_argument('--workers', type=int, default=4, help="number of worker threads for data loading (per RANK if DDP)")
 
     args = parser.parse_args()

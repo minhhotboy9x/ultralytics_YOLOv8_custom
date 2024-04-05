@@ -69,7 +69,7 @@ def main(args):
     state_dict_path =  args.model + 'h'
     torch.save(model.model.state_dict(), state_dict_path)
 
-    model.export()
+    model.export(format='torchscript')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

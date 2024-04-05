@@ -71,17 +71,19 @@ class MinMaxRescalingLayer(nn.Module):
     def __init__(self):
         super(MinMaxRescalingLayer, self).__init__()
 
-    def forward(self, x, y):
-        min_val = torch.min(x.min(-1)[0].min(-1)[0], y.min(-1)[0].min(-1)[0])
-        max_val = torch.max(x.max(-1)[0].max(-1)[0], y.max(-1)[0].min(-1)[0])
+    def forward(self, x):
+        # Tính giá trị tối thiểu và tối đa theo các chiều của tensor
+        min_val = x.min(dim=-1)[0].min(dim=-1)[0]
+        max_val = x.max(dim=-1)[0].max(dim=-1)[0]
         
         # Kiểm tra và xử lý trường hợp mẫu số bằng 0
         denominator_zero_mask = (max_val - min_val) == 0
         max_val = torch.where(denominator_zero_mask, max_val + 1e-6, max_val)
         
-        rescaled_x = (x - min_val[:,:,None,None]) / (max_val[:,:,None,None] - min_val[:,:,None,None])
-        rescaled_y = (y - min_val[:,:,None,None]) / (max_val[:,:,None,None] - min_val[:,:,None,None])
-        return rescaled_x, rescaled_y
+        # Rescale tensor
+        rescaled_x = (x - min_val.unsqueeze(-1).unsqueeze(-1)) / (max_val.unsqueeze(-1).unsqueeze(-1) - min_val.unsqueeze(-1).unsqueeze(-1))
+        
+        return rescaled_x
 
 class MSELoss(nn.Module):
     def __init__(self):
@@ -104,9 +106,8 @@ class DSSIMLoss(nn.Module):
     def forward(self, y_pred, y_true): 
         t_loss = 0
         for i in range(len(y_pred)):
-            y_pred_scaled, y_true_scaled = self.scaler(y_pred[i], y_true[i])
-            loss = ssim_loss(y_pred_scaled, y_true_scaled)
-            loss = (1-loss)/2
+            y_pred_scaled, y_true_scaled = self.scaler(y_pred[i]), self.scaler(y_true[i])
+            loss = ssim_loss(y_pred_scaled, y_true_scaled, window_size=11)
             t_loss += loss
         t_loss /= len(y_pred)
         # print(f'------------{type(t_loss)}--------------')
@@ -114,15 +115,19 @@ class DSSIMLoss(nn.Module):
 
 class DSSIM(nn.Module):
     def __init__(self, device = 'cpu'):
-        super(DSSIM, self).__init__()
+        super(DSSIMLoss, self).__init__()
         self.device = device
         self.scaler = MinMaxRescalingLayer()
 
     def forward(self, y_pred, y_true): 
-        y_pred_scaled, y_true_scaled = self.scaler(y_pred, y_true)
-        loss = ssim_loss(y_pred_scaled, y_true_scaled, window_size=11)
-        # print(f'------------{type(loss)}--------------')
-        return loss
+        t_loss = 0
+        for i in range(len(y_pred)):
+            y_pred_scaled, y_true_scaled = self.scaler(y_pred[i]), self.scaler(y_true[i])
+            loss = ssim_loss(y_pred_scaled, y_true_scaled, window_size=11)
+            t_loss += loss
+        t_loss /= len(y_pred)
+        # print(f'------------{type(t_loss)}--------------')
+        return t_loss
 
 class FocalLoss(nn.Module):
     def __init__(self):
