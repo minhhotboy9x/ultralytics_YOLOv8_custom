@@ -84,12 +84,11 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
         _, features = self.model(dump_image, mask_id = stu_mask_ids)  # forward
         (_, _), teacher_features =  self.teacher(dump_image, mask_id = tea_mask_ids)
 
-    self.alpha_kd = 1.0 # default 2.0
+    self.alpha_kd = 8.0 # default 2.0
     for epoch in range(self.start_epoch, self.epochs):
         self.epoch = epoch
         self.run_callbacks('on_train_epoch_start')
         self.model.train()
-        self.kd_decay.step() # update decay for kd rate
 
         if RANK != -1:
             self.train_loader.sampler.set_epoch(epoch)
@@ -274,8 +273,8 @@ def trainer_train_v2(self: BaseTrainer):
 def progress_string_v2(self: BaseTrainer):
     """Returns a formatted string of training progress with epoch, GPU memory, loss, instances and size."""
     return ('\n' + '%11s' *
-            (4 + len(self.loss_names))  + '%11s'*2) % \
-            ('Epoch', 'GPU_mem', *self.loss_names, 'Instances', 'Size', 'KD_loss', 'KD_decay')
+            (3 + len(self.loss_names))  + '%11s'*2) % \
+            ('Epoch', 'GPU_mem', *self.loss_names, 'Instances', 'Size', 'KD_loss')
 
 def train_v2(self: YOLO,  **kwargs):
     """

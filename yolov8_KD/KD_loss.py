@@ -76,13 +76,10 @@ class MinMaxRescalingLayer(nn.Module):
         min_val = x.min(dim=-1)[0].min(dim=-1)[0]
         max_val = x.max(dim=-1)[0].max(dim=-1)[0]
         
-        # Kiểm tra và xử lý trường hợp mẫu số bằng 0
         denominator_zero_mask = (max_val - min_val) == 0
-        max_val = torch.where(denominator_zero_mask, max_val + 1e-6, max_val)
-        
+        max_val = torch.where(denominator_zero_mask, max_val + 1e-6, max_val)        
         # Rescale tensor
         rescaled_x = (x - min_val.unsqueeze(-1).unsqueeze(-1)) / (max_val.unsqueeze(-1).unsqueeze(-1) - min_val.unsqueeze(-1).unsqueeze(-1))
-        
         return rescaled_x
 
 class MSELoss(nn.Module):

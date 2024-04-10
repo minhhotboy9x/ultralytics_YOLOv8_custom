@@ -465,7 +465,7 @@ def prune(args):
     model.model.train()
 
     replace_c2f_with_c2f_v2(model.model)
-    initialize_weights(model.model)  # set BN.eps, momentum, ReLU.inplace
+    # initialize_weights(model.model)  # set BN.eps, momentum, ReLU.inplace
 
     for name, param in model.model.named_parameters():
         param.requires_grad = True
@@ -527,7 +527,7 @@ def prune(args):
         pruner = tp.pruner.GroupNormPruner(
             model.model,
             example_inputs,
-            global_pruning = False, # additional test
+            global_pruning = True, # additional test
             importance=tp.importance.MagnitudeImportance(p=2),  # L2 norm pruning,
             iterative_steps=1,
             ch_sparsity=ch_sparsity,
@@ -567,7 +567,7 @@ def prune(args):
         nparams_list.append(pruned_nparams / base_nparams * 100)
         pruned_map_list.append(pruned_map)
         map_list.append(current_map)
-        flops_list.append(pruned_macs/1e9*2)
+        flops_list.append(pruned_macs/1e9 * 2)
         no_params_list.append(pruned_nparams/1e6)
         sparities_list.append(sparities_list[-1] * (1-ch_sparsity))
         # remove pruner after single iteration
@@ -602,7 +602,7 @@ if __name__ == "__main__":
     parser.add_argument('--project', default='pruning', help='project name')
     parser.add_argument('--epochs', type=int, default=10, help='epochs each iterative-steps')
     parser.add_argument('--imgsz', type=int, default=640, help='Size of input images')
-    parser.add_argument('--lr0', type=float, default=0.0005, help='Inintial learning rate')
+    parser.add_argument('--lr0', type=float, default=0.001, help='Inintial learning rate')
     parser.add_argument('--workers', type=int, default=4, help="number of worker threads for data loading (per RANK if DDP)")
 
     args = parser.parse_args()

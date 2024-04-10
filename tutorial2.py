@@ -9,11 +9,12 @@ import onnxruntime
 import time
 
     
-model = YOLO('asset/trained_model/VOC/v8n_relu_VOC.pt') 
+model = YOLO('KD_feature/train16/weights/best.pt') 
 # model = YOLO('yolov8s.yaml')
 # model = YOLO('yolov8n_relu.pt') 
-# model = YOLO('runs/detect/train27/weights/best.pt') 
-# model = YOLO("best (2).pt")
+# model = YOLO('asset/trained_model/VOC/v8s_relu_ghostneck_VOC.onnx') 
+# model = YOLO('asset/trained_model/VOC/v8s_relu_fullghost_VOC.pt') 
+# model = YOLO("KD_feature/train16/weights/best.pt")
 # model = YOLO("runs/detect/train29/weights/best.pt")
 # model = torch.jit.load("asset/trained_model/UA-DETRAC2/v8n_relu.torchscript", map_location=torch.device('cpu'))
 # cv1 = CBAM(3)
@@ -26,18 +27,18 @@ if __name__ == '__main__':
     # run 15 detect v8n
     # run 16 detect v8s
     # model.train(data = 'VOC.yaml', epochs = 300, batch=32, device = 1) 
-    # model.train(data = 'coco_vehicle.yaml', epochs = 300, batch=32, device = 1) 
+    # model.train(data = 'coco_vehicle.yaml', epochs = 300, batch=32, device = 0) 
     # model.train(data = 'VOC.yaml', resume=True, device=1) 
 
     # model.info()
-    model.export(format='onnx')
+    # model.export(format='onnx')
     # metrics = model.val(data = 'DETRAC_fix_roi.yaml', batch=64, device=2, split='test') 
     # metrics = model.val(data = 'coco_vehicle.yaml', batch=64, device=2, split='test') 
-    # metrics = model.val(data = 'VOC.yaml', batch=64, device=2, split='test') 
+    metrics = model.val(data = 'VOC.yaml', batch=64, device=2, split='test') 
     # metrics = model.val(data = 'coco_minitrain_10k.yaml', batch=32, device='3') 
 
     # metrics = model.val(data = 'UA-DETRAC.yaml', batch=32, device=0, split='val')
-    # print(metrics) 
+    print(metrics) 
     # replace_c2f_with_c2f_v2(model.model)
     # print(model.model)
     # model.train(data = 'UA-DETRAC.yaml', epochs = 300, lr0 = 1e-4, batch=32, device = 1) 
@@ -74,7 +75,7 @@ if __name__ == '__main__':
 
 
 # pruning 
-# python benchmarks/prunability/yolov8_pruning.py --model asset/trained_model/VOC/v8s_relu_VOC.pt --data VOC.yaml --iterative-steps 10 --epochs 200 --target-prune-rate 0.3 --batch 32 --device 0
+# python benchmarks/prunability/yolov8_pruning.py --model asset/trained_model/VOC/v8s_relu_VOC.pt --data VOC.yaml --iterative-steps 10 --epochs 200 --target-prune-rate 0.2 --batch 32 --device 0
 # python benchmarks/prunability/yolov8_pruning.py --model asset/trained_model/UA-DETRAC2/v8s_relu_c2fv2_DETRAC2.pt --data UA-DETRAC.yaml --iterative-steps 3 --epochs 200 --target-prune-rate 0.3 --batch 32 --device 1
 
 # test
@@ -91,5 +92,4 @@ if __name__ == '__main__':
 # python yolov8_QT/ptq.py --model asset/trained_model/UA-DETRAC2/v8s_relu_DETRAC2.pt --data UA-DETRAC.yaml --device 1
 
 # KD
-# python yolov8_KD/KD_training.py --model asset/trained_model/UA-DETRAC2/v8n_relu_DETRAC2.pt --teacher yolov8n_relu.pt
-#    --batch 16 --lr0 1e-4 --epochs 100 --device 4
+# python yolov8_KD/KD_training_ver7.py --model asset/trained_model/coco_vehicle/v8s_relu_ghostneck_cocovehicle.pt --teacher asset/trained_model/coco_vehicle/v8s_relu_cocovehicle.pt --data coco_vehicle.yaml --batch 4 --lr0 1e-3 --epochs 200 --device 1
