@@ -8,8 +8,8 @@ import thop
 import torch
 import torch.nn as nn
 
-from ultralytics.nn.modules import (Add, C1, C2, C3, C3TR, SPP, SPPF, Bottleneck, BottleneckCSP, C2f, C2f_v2, C2fGhost, C3Ghost, C3x, Classify,
-                                    Concat, Conv, ConvTranspose, Detect, DWConv, DWConvTranspose2d, Ensemble, Focus, TransformerBlock, 
+from ultralytics.nn.modules import (Add, C1, C2, C3, C3TR, SPP, SPPF, Bottleneck, BottleneckCSP, C2f, C2fRep, C2f_v2, C2fGhost, C3Ghost, C3x, Classify,
+                                    Concat, Conv, Conv2, RepConv, ConvTranspose, Detect, DWConv, DWConvTranspose2d, Ensemble, Focus, TransformerBlock, 
                                     GhostBottleneck, GhostConv, CBAM, Pose, Segment)
 
 from ultralytics.nn.modules_quantized import (Q_C1, Q_C2, Q_C3, Q_Conv, Q_BottleneckCSP, Q_Bottleneck, Q_ConvTranspose, Q_DWConv,
@@ -110,15 +110,21 @@ class BaseModel(nn.Module):
         """
         if not self.is_fused():
             for m in self.model.modules():
-                if isinstance(m, (Conv, DWConv)) and hasattr(m, 'bn'):
+                if isinstance(m, (Conv, Conv2, DWConv)) and hasattr(m, "bn"):
+                    if isinstance(m, Conv2):
+                        m.fuse_convs()
                     m.conv = fuse_conv_and_bn(m.conv, m.bn)  # update conv
-                    delattr(m, 'bn')  # remove batchnorm
+                    delattr(m, "bn")  # remove batchnorm
                     m.forward = m.forward_fuse  # update forward
-                if isinstance(m, ConvTranspose) and hasattr(m, 'bn'):
+                if isinstance(m, ConvTranspose) and hasattr(m, "bn"):
                     m.conv_transpose = fuse_deconv_and_bn(m.conv_transpose, m.bn)
-                    delattr(m, 'bn')  # remove batchnorm
+                    delattr(m, "bn")  # remove batchnorm
+                    m.forward = m.forward_fuse  # update forward
+                if isinstance(m, RepConv):
+                    m.fuse_convs()
                     m.forward = m.forward_fuse  # update forward
             self.info(verbose=verbose)
+
         return self
 
     def is_fused(self, thresh=10):
@@ -470,6 +476,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
 
     if act:
         Conv.default_act = eval(act)  # redefine default activation, i.e. Conv.default_act = nn.SiLU()
+        RepConv.default_act = eval(act)
         Q_Conv.default_act = eval(act)  # redefine default activation, i.e. Conv.default_act = nn.SiLU()
         DeConv.default_act = eval(act)
         if verbose:
@@ -495,8 +502,8 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                     args[j] = locals()[a] if a in locals() else ast.literal_eval(a)
 
         n = n_ = max(round(n * depth), 1) if n > 1 else n  # depth gain
-        if m in (Classify, Conv, ConvTranspose, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, Focus,
-                 BottleneckCSP, C1, C2, C2f, C2f_v2, C2fGhost, C3, C3TR, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x, DeConv) \
+        if m in (Classify, Conv, Conv2, ConvTranspose, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, Focus,
+                 BottleneckCSP, C1, C2, C2f, C2fRep, C2f_v2, C2fGhost, C3, C3TR, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x, DeConv) \
             or m in (Q_Conv, Q_ConvTranspose, Q_GhostConv, Q_Bottleneck, Q_GhostBottleneck, Q_SPP, Q_SPPF, Q_DWConv, Q_Focus,
                  Q_BottleneckCSP, Q_C1, Q_C2, Q_C2f, Q_C3, Q_C3TR, Q_C3Ghost, Q_C3x, Q_DWConvTranspose2d):
             c1, c2 = ch[f], args[0]
@@ -504,7 +511,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 c2 = make_divisible(min(c2, max_channels) * width, 8)
 
             args = [c1, c2, *args[1:]]
-            if m in (BottleneckCSP, C1, C2, C2f, C2f_v2, C2fGhost, C3, C3TR, C3Ghost, C3x) or \
+            if m in (BottleneckCSP, C1, C2, C2f, C2fRep, C2f_v2, C2fGhost, C3, C3TR, C3Ghost, C3x) or \
                 m in (Q_BottleneckCSP, Q_C1, Q_C2, Q_C2f, Q_C3, Q_C3TR, Q_C3Ghost, Q_C3x):
                 args.insert(2, n)  # number of repeats
                 n = 1

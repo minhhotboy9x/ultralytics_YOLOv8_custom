@@ -33,22 +33,6 @@ class Model(nn.Module):
         return x
 
 if __name__ == "__main__":
-    model = Model()
-    # Thiết lập QConfig cho quantize đầu vào
-    qconfig = QConfig(activation=torch.quantization.HistogramObserver.with_args(reduce_range=True, qscheme=torch.per_tensor_symmetric),
-                                weight=torch.quantization.PerChannelMinMaxObserver.with_args(ch_axis=0, dtype=torch.qint8, qscheme=torch.per_channel_symmetric)
-                            )
-    model.qconfig = qconfig
-    # torch.quantization.fuse_modules(model, [['conv', 'act']], inplace=True)
-    example_input = torch.randn(1, 3, 5, 5)
-    print(example_input)
-    torch.quantization.prepare(model, inplace=True)
-    model(example_input)
-    torch.quantization.convert(model, inplace=True)
-    print(model)
-    print(model.conv.weight())
-    print('----------------')
-    print(model(example_input))
-
-
+    model = YOLO('asset/trained_model/VOC/v8n_relu_VOC.pt')
+    model.export(format='onnx', dynamic=True)
 

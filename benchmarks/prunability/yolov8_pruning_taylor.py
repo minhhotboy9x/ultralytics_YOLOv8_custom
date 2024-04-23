@@ -23,13 +23,17 @@ from matplotlib import pyplot as plt
 from ultralytics import YOLO, __version__
 from ultralytics.nn.modules import Detect, C2f, Conv, Bottleneck, C2f_v2
 from ultralytics.nn.modules_deformable import TDetect
+from ultralytics.yolo.data.utils import check_det_dataset
+from ultralytics.yolo.data import build_dataloader
 from ultralytics.nn.tasks import attempt_load_one_weight
+from ultralytics.yolo.cfg import get_cfg, DEFAULT_CFG
 from ultralytics.yolo.engine.model import TASK_MAP
-from ultralytics.yolo.engine.trainer import BaseTrainer
+from ultralytics.yolo.engine.trainer import BaseTrainer 
 from ultralytics.yolo.utils import yaml_load, LOGGER, RANK, DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, TQDM_BAR_FORMAT, colorstr
 from ultralytics.yolo.utils.checks import check_yaml
-from ultralytics.yolo.utils.torch_utils import initialize_weights, de_parallel
-
+from ultralytics.yolo.utils.torch_utils import initialize_weights, de_parallel, select_device
+from ultralytics.yolo.v8.detect.train import Loss
+from torch.cuda import amp
 import torch_pruning as tp
 
 
@@ -183,8 +187,6 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
                 pbar = tqdm(enumerate(self.train_loader), total=nb, bar_format=TQDM_BAR_FORMAT)
             self.tloss = None
             self.optimizer.zero_grad()
-            if self.pruner:
-                self.pruner.update_regularizor()
 
             for i, batch in pbar:
                 self.run_callbacks('on_train_batch_start')
@@ -216,8 +218,6 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
 
                 # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
                 if ni - last_opt_step >= self.accumulate:
-                    if self.pruner:
-                        self.pruner.regularize(self.model)
                     self.optimizer_step()
                     last_opt_step = ni
 
@@ -391,7 +391,7 @@ def strip_optimizer_v2(f: Union[str, Path] = 'best.pt', s: str = '') -> None:
     mb = os.path.getsize(s or f) / 1E6  # filesize
     LOGGER.info(f"Optimizer stripped from {f},{f' saved as {s},' if s else ''} {mb:.1f}MB")
 
-def train_v2(self: YOLO, pruning=False, pruner=None, **kwargs):
+def train_v2(self: YOLO, pruning=False, **kwargs):
     """
     Disabled loading new model when pruning flag is set. originated from ultralytics/yolo/engine/model.py
     """
@@ -423,7 +423,6 @@ def train_v2(self: YOLO, pruning=False, pruner=None, **kwargs):
         # pruning mode
         self.trainer.pruning = True
         self.trainer.model = self.model
-        self.trainer.pruner = pruner
         # replace some functions to disable half precision saving
         self.trainer.save_model = save_model_v2.__get__(self.trainer)
         self.trainer.final_eval = final_eval_v2.__get__(self.trainer)
@@ -437,6 +436,44 @@ def train_v2(self: YOLO, pruning=False, pruner=None, **kwargs):
         self.overrides = self.model.args
         self.metrics = getattr(self.trainer.validator, 'metrics', None)
 
+def calculate_grad(model, **args):
+    # save temporary model.args
+    tmp_args = model.args
+
+    args = get_cfg(DEFAULT_CFG, args['args'])
+    device = select_device(device=args.device, batch=0)
+    model.args = args
+    model.to(device)
+    def criterion(preds, batch):
+        """Compute loss for YOLO prediction and ground-truth."""
+        compute_loss = Loss(de_parallel(model))
+        return compute_loss(preds, batch)
+
+    def preprocess_batch(batch, device): #preprocess_batch trong từng ảnh
+        """Preprocesses a batch of images by scaling and converting to float."""
+        batch['img'] = batch['img'].to(device, non_blocking=True).float() / 255
+        return batch
+    
+    data = check_det_dataset(args.data)
+    trainset = data['train']
+    gs = max(int(de_parallel(model).stride.max() if model else 0), 32)
+    train_loader = build_dataloader(args, args.batch, img_path=trainset, stride=gs, rank=RANK, mode='train',
+                             rect=False, data_info=data)[0]
+    nb = len(train_loader)
+    print('--------Calculate grad start--------')
+    pbar = tqdm(enumerate(train_loader), total=nb, bar_format=TQDM_BAR_FORMAT)
+    scaler = amp.GradScaler()
+    for i, batch in pbar:
+        with torch.cuda.amp.autocast():
+            batch = preprocess_batch(batch, device)
+            preds = model(batch['img'])
+            loss, _ = criterion(preds, batch) # cal loss
+        scaler.scale(loss).backward()
+    print('--------Calculate grad end---------')
+
+    # return back model.args
+    model.args = tmp_args
+    model.to('cpu')
 
 def prune(args):
     # load trained yolov8 model
@@ -448,7 +485,7 @@ def prune(args):
     # modify gpu
     pruning_cfg['device'] = args.device
 
-    #modify workers
+    # modify workers
     pruning_cfg['workers'] = args.workers
 
     # save results in folder
@@ -469,7 +506,6 @@ def prune(args):
 
     for name, param in model.model.named_parameters():
         param.requires_grad = True
-
     example_inputs = torch.randn(1, 3, pruning_cfg["imgsz"], pruning_cfg["imgsz"]).to(model.device)
     macs_list, nparams_list, map_list, pruned_map_list = [], [], [], []
     flops_list, no_params_list, sparities_list = [], [], []
@@ -522,20 +558,30 @@ def prune(args):
         for m in model.model.modules():
             if isinstance(m, (Detect,)):
                 ignored_layers.append(m)
-        
         example_inputs = example_inputs.to(model.device)
-        pruner = tp.pruner.GroupNormPruner(
+        pruner = tp.pruner.MetaPruner(
             model.model,
             example_inputs,
             global_pruning = True, # additional test
-            importance=tp.importance.MagnitudeImportance(p=1),  # L2 norm pruning,
+            importance=tp.importance.GroupTaylorImportance(),  # L2 norm pruning,
             iterative_steps=1,
             ch_sparsity=ch_sparsity,
             ignored_layers=ignored_layers,
             unwrapped_parameters=unwrapped_parameters
         )
+        calculate_grad(model.model, args=deepcopy(pruning_cfg))
+        for name, param in model.model.named_parameters():
+            if param.requires_grad and param.grad is not None:
+                print(f"Gradient đã được tính cho tham số '{name}': {param.grad}")
+            else:
+                print(f"Gradient chưa được tính cho tham số '{name}'.")
         pruner.step() # remove some weights with lowest importance
+        # for i, g in enumerate(pruner.step(interactive=True)):
+        #     print(i, g)
+        #     g.prune()
 
+        for param in model.model.parameters():
+            param.grad = None
         # pre fine-tuning validation
         pruning_cfg['name'] = os.path.join(prefix_folder, f"step_{i}_pre_val")
         # pruning_cfg['batch'] = 1
@@ -553,7 +599,7 @@ def prune(args):
         pruning_cfg['name'] = os.path.join(prefix_folder, f"step_{i}_finetune")
         pruning_cfg['batch'] = batch_size  # restore batch size
         # pass pruner if sparse training
-        model.train_v2(pruning=True, pruner = pruner if args.sparse_training else None, **pruning_cfg)
+        model.train_v2(pruning=True, **pruning_cfg)
 
         # post fine-tuning validation
         pruning_cfg['name'] = os.path.join(prefix_folder, f"step_{i}_post_val")
@@ -594,7 +640,6 @@ if __name__ == "__main__":
     parser.add_argument('--iterative-steps', default=16, type=int, help='Total pruning iteration step')
     parser.add_argument('--target-prune-rate', default=0.5, type=float, help='Target pruning rate')
     parser.add_argument('--max-map-drop', default=0.2, type=float, help='Allowed maximum map drop after fine-tuning')
-    parser.add_argument('--sparse-training', default=False, type=bool, help='Sparse training')
 
     parser.add_argument('--batch', default=4, type=int, help='batch_size')
     parser.add_argument('--data', default='coco128.yaml', help='dataset')
@@ -610,5 +655,5 @@ if __name__ == "__main__":
     os.makedirs(args.project, exist_ok=True)
     k = os.listdir(args.project)
     args.no_runs = len(k)
-
+    
     prune(args)

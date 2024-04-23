@@ -13,25 +13,8 @@ from ptflops import get_model_complexity_info
 from torchvision.ops import DeformConv2d
 import torchvision.models as models
 
-class MyModel(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.conv = nn.Conv2d(3, 4, 3, bias=False)
-        self.conv1 = nn.Conv2d(3, 2, 3, bias=False)
-        self.conv2 = nn.Conv2d(3, 2, 3, bias=False)
-        conv_weight = self.conv.weight
-        self.conv1.weight = nn.Parameter(conv_weight[:2, ...])
-        self.conv2.weight = nn.Parameter(conv_weight[2:, ...])
-
-    def forward(self, x):
-        return self.conv(x) - torch.cat([self.conv1(x), self.conv2(x)], dim=1)
-    
-    def forward2(self, x):
-        return ''
-
-
+model = YOLO('runs/detect/train35/weights/best.pt')
+model2 = YOLO('yolov8n.pt')
 if __name__ == '__main__':
-    input_example = torch.ones(1, 3, 10, 10)
-    model = MyModel()
-    print(model(input_example))
+    print(torch.cuda.device_count())
     

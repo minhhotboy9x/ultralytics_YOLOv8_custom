@@ -4,10 +4,10 @@ Common modules
 """
 
 import math
-
+import numpy as np
 import torch
 import torch.nn as nn
-
+import numpy as np
 from ultralytics.yolo.utils.tal import dist2bbox, make_anchors
 
 
@@ -46,6 +46,132 @@ class Conv(nn.Module):
         """Perform transposed convolution of 2D data."""
         return self.act(self.conv(x))
 
+class Conv2(Conv):
+    """Simplified RepConv module with Conv fusing."""
+
+    def __init__(self, c1, c2, k=3, s=1, p=None, g=1, d=1, act=True):
+        """Initialize Conv layer with given arguments including activation."""
+        super().__init__(c1, c2, k, s, p, g=g, d=d, act=act)
+        self.cv2 = nn.Conv2d(c1, c2, 1, s, autopad(1, p, d), groups=g, dilation=d, bias=False)  # add 1x1 conv
+
+    def forward(self, x):
+        """Apply convolution, batch normalization and activation to input tensor."""
+        return self.act(self.bn(self.conv(x) + self.cv2(x)))
+
+    def forward_fuse(self, x):
+        """Apply fused convolution, batch normalization and activation to input tensor."""
+        return self.act(self.conv(x))
+
+    def fuse_convs(self):
+        """Fuse parallel convolutions."""
+        w = torch.zeros_like(self.conv.weight.data)
+        i = [x // 2 for x in w.shape[2:]]
+        w[:, :, i[0] : i[0] + 1, i[1] : i[1] + 1] = self.cv2.weight.data.clone()
+        self.conv.weight.data += w
+        self.__delattr__("cv2")
+        self.forward = self.forward_fuse
+
+class RepConv(nn.Module):
+    """
+    RepConv is a basic rep-style block, including training and deploy status.
+
+    This module is used in RT-DETR.
+    Based on https://github.com/DingXiaoH/RepVGG/blob/main/repvgg.py
+    """
+
+    default_act = nn.SiLU()  # default activation
+
+    def __init__(self, c1, c2, k=3, s=1, p=1, g=1, d=1, act=True, bn=False, deploy=False):
+        """Initializes Light Convolution layer with inputs, outputs & optional activation function."""
+        super().__init__()
+        assert k == 3 and p == 1
+        self.g = g
+        self.c1 = c1
+        self.c2 = c2
+        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+
+        self.bn = nn.BatchNorm2d(num_features=c1) if bn and c2 == c1 and s == 1 else None
+        self.conv1 = Conv(c1, c2, k, s, p=p, g=g, act=False)
+        self.conv2 = Conv(c1, c2, 1, s, p=(p - k // 2), g=g, act=False)
+
+    def forward_fuse(self, x):
+        """Forward process."""
+        return self.act(self.conv(x))
+
+    def forward(self, x):
+        """Forward process."""
+        id_out = 0 if self.bn is None else self.bn(x)
+        return self.act(self.conv1(x) + self.conv2(x) + id_out)
+
+    def get_equivalent_kernel_bias(self):
+        """Returns equivalent kernel and bias by adding 3x3 kernel, 1x1 kernel and identity kernel with their biases."""
+        kernel3x3, bias3x3 = self._fuse_bn_tensor(self.conv1)
+        kernel1x1, bias1x1 = self._fuse_bn_tensor(self.conv2)
+        kernelid, biasid = self._fuse_bn_tensor(self.bn)
+        return kernel3x3 + self._pad_1x1_to_3x3_tensor(kernel1x1) + kernelid, bias3x3 + bias1x1 + biasid
+
+    def _pad_1x1_to_3x3_tensor(self, kernel1x1):
+        """Pads a 1x1 tensor to a 3x3 tensor."""
+        if kernel1x1 is None:
+            return 0
+        else:
+            return torch.nn.functional.pad(kernel1x1, [1, 1, 1, 1])
+
+    def _fuse_bn_tensor(self, branch):
+        """Generates appropriate kernels and biases for convolution by fusing branches of the neural network."""
+        if branch is None:
+            return 0, 0
+        if isinstance(branch, Conv):
+            kernel = branch.conv.weight
+            running_mean = branch.bn.running_mean
+            running_var = branch.bn.running_var
+            gamma = branch.bn.weight
+            beta = branch.bn.bias
+            eps = branch.bn.eps
+        elif isinstance(branch, nn.BatchNorm2d):
+            if not hasattr(self, "id_tensor"):
+                input_dim = self.c1 // self.g
+                kernel_value = np.zeros((self.c1, input_dim, 3, 3), dtype=np.float32)
+                for i in range(self.c1):
+                    kernel_value[i, i % input_dim, 1, 1] = 1
+                self.id_tensor = torch.from_numpy(kernel_value).to(branch.weight.device)
+            kernel = self.id_tensor
+            running_mean = branch.running_mean
+            running_var = branch.running_var
+            gamma = branch.weight
+            beta = branch.bias
+            eps = branch.eps
+        std = (running_var + eps).sqrt()
+        t = (gamma / std).reshape(-1, 1, 1, 1)
+        return kernel * t, beta - running_mean * gamma / std
+
+    def fuse_convs(self):
+        """Combines two convolution layers into a single layer and removes unused attributes from the class."""
+        if hasattr(self, "conv"):
+            return
+        kernel, bias = self.get_equivalent_kernel_bias()
+        self.conv = nn.Conv2d(
+            in_channels=self.conv1.conv.in_channels,
+            out_channels=self.conv1.conv.out_channels,
+            kernel_size=self.conv1.conv.kernel_size,
+            stride=self.conv1.conv.stride,
+            padding=self.conv1.conv.padding,
+            dilation=self.conv1.conv.dilation,
+            groups=self.conv1.conv.groups,
+            bias=True,
+        ).requires_grad_(False)
+        self.conv.weight.data = kernel
+        self.conv.bias.data = bias
+        for para in self.parameters():
+            para.detach_()
+        self.__delattr__("conv1")
+        self.__delattr__("conv2")
+        if hasattr(self, "nm"):
+            self.__delattr__("nm")
+        if hasattr(self, "bn"):
+            self.__delattr__("bn")
+        if hasattr(self, "id_tensor"):
+            self.__delattr__("id_tensor")
 
 class DWConv(Conv):
     """Depth-wise convolution."""
@@ -158,6 +284,15 @@ class Bottleneck(nn.Module):
         """'forward()' applies the YOLOv5 FPN to input data."""
         return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
 
+class RepBottleneck(Bottleneck):
+    """Standard bottleneck."""
+
+    def __init__(self, c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5):  # ch_in, ch_out, shortcut, groups, kernels, expand
+        super().__init__(c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5)
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = RepConv(c1, c_, k[0], 1, bn=True)
+        self.cv2 = RepConv(c_, c2, k[1], 1, g=g, bn=True)
+        
 
 class BottleneckCSP(nn.Module):
     """CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks."""
@@ -233,6 +368,12 @@ class C2f(nn.Module):
         y = list(self.cv1(x).split((self.c, self.c), 1))
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
+
+class C2fRep(C2f):
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.m = nn.ModuleList(RepConv(self.c, self.c) for _ in range(n))
+
 
 class C2f_v2(nn.Module):
     # CSP Bottleneck with 2 convolutions
