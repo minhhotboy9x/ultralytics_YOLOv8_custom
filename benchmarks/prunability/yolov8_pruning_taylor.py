@@ -34,6 +34,7 @@ from ultralytics.yolo.utils.checks import check_yaml
 from ultralytics.yolo.utils.torch_utils import initialize_weights, de_parallel, select_device
 from ultralytics.yolo.v8.detect.train import Loss
 from torch.cuda import amp
+from itertools import islice
 import torch_pruning as tp
 
 
@@ -461,7 +462,7 @@ def calculate_grad(model, **args):
                              rect=False, data_info=data)[0]
     nb = len(train_loader)
     print('--------Calculate grad start--------')
-    pbar = tqdm(enumerate(train_loader), total=nb, bar_format=TQDM_BAR_FORMAT)
+    pbar = tqdm(enumerate(islice(train_loader, 10)), total=nb, bar_format=TQDM_BAR_FORMAT)
     scaler = amp.GradScaler()
     for i, batch in pbar:
         with torch.cuda.amp.autocast():

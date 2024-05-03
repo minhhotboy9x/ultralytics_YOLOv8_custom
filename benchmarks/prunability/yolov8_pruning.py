@@ -527,8 +527,8 @@ def prune(args):
         pruner = tp.pruner.GroupNormPruner(
             model.model,
             example_inputs,
-            global_pruning = True, # additional test
-            importance=tp.importance.MagnitudeImportance(p=1),  # L2 norm pruning,
+            global_pruning = False, # additional test
+            importance=tp.importance.MagnitudeImportance(p=2),  # L2 norm pruning,
             iterative_steps=1,
             ch_sparsity=ch_sparsity,
             ignored_layers=ignored_layers,
@@ -582,7 +582,7 @@ def prune(args):
             print("Pruning early stop")
             break
 
-    model.export(format='onnx')
+    model.export(format='onnx', dynamic=True)
     model.export(format='torchscript')
 
 if __name__ == "__main__":

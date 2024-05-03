@@ -290,8 +290,8 @@ class RepBottleneck(Bottleneck):
     def __init__(self, c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5):  # ch_in, ch_out, shortcut, groups, kernels, expand
         super().__init__(c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5)
         c_ = int(c2 * e)  # hidden channels
-        self.cv1 = RepConv(c1, c_, k[0], 1, bn=True)
-        self.cv2 = RepConv(c_, c2, k[1], 1, g=g, bn=True)
+        self.cv1 = Conv2(c1, c_, k[0], 1)
+        self.cv2 = Conv2(c_, c2, k[1], 1, g=g)
         
 
 class BottleneckCSP(nn.Module):
@@ -372,7 +372,7 @@ class C2f(nn.Module):
 class C2fRep(C2f):
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
         super().__init__(c1, c2, n, shortcut, g, e)
-        self.m = nn.ModuleList(RepConv(self.c, self.c) for _ in range(n))
+        self.m = nn.ModuleList(RepBottleneck(self.c, self.c, shortcut, g, k=(3, 3), e=1.0) for _ in range(n))
 
 
 class C2f_v2(nn.Module):
