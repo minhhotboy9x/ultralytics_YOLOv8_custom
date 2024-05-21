@@ -9,19 +9,19 @@ import onnxruntime
 import time
 
     
-model = YOLO('coco/train4/weights/last.pt') 
+# model = YOLO('coco/train4/weights/best.pt') 
 # model = YOLO('yolov8n.yaml')
-# model = YOLO('yolov8n_relu.pt') 
-# model = YOLO('pruning/train19/step_46_finetune4/weights/best.pt') 
-# model = YOLO('asset/trained_model/VOC/v8s_relu_fullghost_VOC.pt') 
-# model = YOLO("KD_feature/train16/weights/best.pt")
-# model = YOLO("asset/trained_model/VOC/v8s_relu_localprune_bftrain_VOC.pt")
+# model = YOLO('yolov8s_relu.pt') 
+# model = YOLO('yolov8n_v2.pt') 
+model = YOLO('asset/trained_model/VOC/v8s_relu_Repbackbone_localprune_0.4_bftrain_VOC.pt') 
+# model = YOLO("asset/trained_model/VOC/v8s_relu_localprune_0,2_iter2_l1_VOC.pt")
+# model = YOLO("asset/trained_model/VOC/v8s_relu_VOC.pt")
 # model = torch.jit.load("asset/trained_model/UA-DETRAC2/v8n_relu.torchscript", map_location=torch.device('cpu'))
 # cv1 = CBAM(3)
 if __name__ == '__main__':
-    # model.train(data = 'coco.yaml', epochs = 500, batch=32, device = 0, project='coco')
-    model.train(data = 'coco.yaml', resume=True, device = 1)
-    # model.train(data = 'coco128.yaml', epochs = 5, project='coco_128', device = 1) 
+    # model.train(data = 'coco.yaml', epochs = 500, batch=32, device = 1, project='coco')
+    # model.train(data = 'coco.yaml', resume=True, device = 1)
+    # model.train(data = 'coco128.yaml', epochs = 5, project='coco_128', device = 3) 
     
     # print(model.model)
     # run 15 detect v8n
@@ -32,11 +32,11 @@ if __name__ == '__main__':
 
     # model.fuse()
     # model2.info()
-    # model.export(format='onnx')
+    model.export(format='onnx')
     # metrics = model.val(data = 'DETRAC_fix_roi.yaml', batch=64, device=2, split='test') 
     # metrics = model.val(data = 'coco_vehicle.yaml', batch=64, device=2, split='test') 
     # metrics = model.val(data = 'VOC.yaml', batch=32, device=2, split='test') 
-    # metrics = model.val(data = 'coco_minitrain_10k.yaml', batch=32, device='3') 
+    # metrics = model.val(data = 'coco.yaml', batch=32, device=1) 
 
     # metrics = model.val(data = 'UA-DETRAC.yaml', batch=32, device=0, split='val')
     # print(metrics) 
@@ -79,13 +79,14 @@ if __name__ == '__main__':
 
 # pruning 
 # python benchmarks/prunability/yolov8_pruning.py --model asset/trained_model/VOC/v8s_relu_VOC.pt --data VOC.yaml --iterative-steps 2 --epochs 200 --target-prune-rate 0.2 --sparse-training True --batch 16 --device 3
-# python benchmarks/prunability/yolov8_pruning.py --model yolov8s.yaml --data VOC.yaml --iterative-steps 1 --epochs 300 --target-prune-rate 0.3 --lr0 0.01 --batch 16 --device 3
+# python benchmarks/prunability/yolov8_pruning.py --model yolov8s.yaml --data VOC.yaml --iterative-steps 1 --epochs 300 --target-prune-rate 0.4 --lr0 0.01 --batch 32 --device 1
+# python benchmarks/prunability/yolov8_pruning_bftrain.py --model yolov8s.yaml --data VOC.yaml --iterative-steps 1 --epochs 300 --target-prune-rate 0.4 --lr0 0.01 --batch 32 --device 1
 # python benchmarks/prunability/yolov8_pruning.py --model asset/trained_model/UA-DETRAC2/v8s_relu_c2fv2_DETRAC2.pt --data UA-DETRAC.yaml --iterative-steps 3 --epochs 200 --target-prune-rate 0.3 --batch 32 --device 1
 # python benchmarks/prunability/yolov8_pruning_taylor.py --model asset/trained_model/VOC/v8s_relu_VOC.pt --data VOC.yaml --iterative-steps 2 --epochs 200 --target-prune-rate 0.2 --batch 32 --device 3
 
 
 # test
-# python benchmarks/prunability/yolov8_pruning_taylor.py --model yolov8s.pt --data coco128.yaml --iterative-steps 20 --epochs 2 --target-prune-rate 0.8 --batch 4 --max-map-drop 1.0 --device 1
+# python benchmarks/prunability/yolov8_pruning_bftrain.py --model yolov8s.yaml --data coco128.yaml --iterative-steps 1 --epochs 2 --target-prune-rate 0.2 --batch 4 --max-map-drop 1.0 --device 0
 
 
 # test quantized model

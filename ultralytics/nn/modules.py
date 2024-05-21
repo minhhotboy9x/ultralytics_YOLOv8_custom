@@ -285,7 +285,7 @@ class Bottleneck(nn.Module):
         return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
 
 class RepBottleneck(Bottleneck):
-    """Standard bottleneck."""
+    """Rep bottleneck."""
 
     def __init__(self, c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5):  # ch_in, ch_out, shortcut, groups, kernels, expand
         super().__init__(c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5)
@@ -366,6 +366,13 @@ class C2f(nn.Module):
     def forward_split(self, x):
         """Applies spatial attention to module's input."""
         y = list(self.cv1(x).split((self.c, self.c), 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+    
+    def forward_split_v2(self, x):
+        c2 = self.cv2.conv.out_channels
+        c = int(c2 * 0.5)
+        y = list(self.cv1(x).split((c, c), 1))
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
 

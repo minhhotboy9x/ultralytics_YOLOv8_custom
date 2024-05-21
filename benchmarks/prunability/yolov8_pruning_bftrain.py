@@ -334,6 +334,47 @@ def replace_c2f_with_c2f_v2(module):
         else:
             replace_c2f_with_c2f_v2(child_module)
 
+def convert_c2f_v2_to_c2f(c2f_v2):
+    c1 = c2f_v2.cv1.conv.in_channels
+    c2 = c2f_v2.cv2.conv.out_channels
+    c = int(c2 * 0.5)
+    n = int(c2f_v2.cv2.conv.in_channels / c) - 2
+    c2f = C2f(c1, c2, n, shortcut=infer_shortcut(c2f_v2.m[0]))
+    state_dict = c2f.state_dict()
+    state_dict_v2 = c2f_v2.state_dict()
+    # for name, param in state_dict_v2.items():
+    #     print(f"Parameter Name: {name}")
+    cv0_state = state_dict_v2["cv0.conv.weight"]
+    cv1_state = state_dict_v2["cv1.conv.weight"]
+    state_dict['cv1.conv.weight'] = torch.concat([cv0_state, cv1_state], dim=0)
+
+    for bn_key in ['weight', 'bias', 'running_mean', 'running_var']:
+        cv0_bn = state_dict_v2[f'cv0.bn.{bn_key}']
+        cv1_bn = state_dict_v2[f'cv1.bn.{bn_key}']
+        state_dict_v2[f'cv1.bn.{bn_key}'] = torch.concat([cv0_bn, cv1_bn], dim=0)
+    
+    for key in state_dict:
+        if not key.startswith('cv1.') and not key.startswith('cv0.'):
+            state_dict[key] = state_dict_v2[key]
+
+    # Transfer all non-method attributes
+    for attr_name in dir(c2f_v2):
+        attr_value = getattr(c2f_v2, attr_name)
+        if not callable(attr_value) and '_' not in attr_name:
+            setattr(c2f, attr_name, attr_value)
+    
+    c2f.forward_split = c2f.forward_split_v2
+    c2f.load_state_dict(state_dict)
+    return c2f
+
+def replace_c2f_v2_with_c2f(module):
+    for name, child_module in module.named_children():
+        if isinstance(child_module, C2f_v2):
+            Conv.default_act = child_module.cv0.act
+            c2f = convert_c2f_v2_to_c2f(child_module)
+            setattr(module, name, c2f)
+        else:
+            replace_c2f_v2_with_c2f(child_module)
 
 def save_model_v2(self: BaseTrainer):
     """
@@ -512,19 +553,26 @@ def prune(args):
     '''
     print('-----------pruning ratio each step:', ch_sparsity)
     for i in range(args.iterative_steps):
-
         model.model.train()
         for name, param in model.model.named_parameters():
             param.requires_grad = True
 
         ignored_layers = []
         unwrapped_parameters = []
+        # for m in model.model.modules():
+        #     if isinstance(m, (Detect,)):
+        #         for modulelist in m.cv2:
+        #             ignored_layers.append(modulelist[-1])
+        #         for modulelist in m.cv3:
+        #             ignored_layers.append(modulelist[-1])
+        #         ignored_layers.append(m.dfl)
+        
         for m in model.model.modules():
             if isinstance(m, (Detect,)):
                 ignored_layers.append(m)
-        
+                
         example_inputs = example_inputs.to(model.device)
-        pruner = tp.pruner.GroupNormPruner(
+        pruner = tp.pruner.MetaPruner(
             model.model,
             example_inputs,
             global_pruning = False, # additional test
@@ -535,6 +583,7 @@ def prune(args):
             unwrapped_parameters=unwrapped_parameters
         )
         pruner.step() # remove some weights with lowest importance
+        replace_c2f_v2_with_c2f(model.model)
 
         # pre fine-tuning validation
         pruning_cfg['name'] = os.path.join(prefix_folder, f"step_{i}_pre_val")
