@@ -136,7 +136,7 @@ KD_feature/
 coco_kd/
 coco_128/
 coco128/
-yolov8_tracking/
+feature_visualize/
 /datasets/
 runs/
 wandb/
