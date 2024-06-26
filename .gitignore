@@ -135,6 +135,8 @@ dmypy.json
 KD_feature/
 coco_kd/
 coco_128/
+coco128/
+/yolov8_tracking/
 /datasets/
 runs/
 wandb/
@@ -148,6 +150,7 @@ pruning/
 weights/
 *.weights
 *.pt
+*.pth
 *.pb
 *.onnx
 *.engine
