@@ -574,6 +574,8 @@ class GhostBottleneck_sc(nn.Module):
     """Ghost Bottleneck with shortcut"""
     def __init__(self, c1, c2, shortcut=True):  # ch_in, ch_out, shortcut, groups, kernels, expand
         super().__init__()
+        self.c1 = c1
+        self.c2 = c2
         c_ = c2 // 2
         self.conv = nn.Sequential(
             GhostConv(c1, c_, 1, 1),  # pw

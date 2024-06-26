@@ -61,12 +61,12 @@ def replace_c2f_v2_with_c2f(module):
             replace_c2f_v2_with_c2f(child_module)
 
 if __name__ == "__main__":
-    model = YOLO('yolov8s_relu.pt')
-    # model = YOLO('pruning/train23/step_0_finetune/weights/best.pt')
+    # model = YOLO('asset/trained_model/VOC/v8s_relu_localprune_0.4_bftrain_VOC.pt')
+    model = YOLO('pruning/train21/step_0_finetune/weights/best.pt')
     # replace_c2f_v2_with_c2f(model.model)
     # result = model.val(data="VOC.yaml", split="test", batch=4)
     # print(model.model)
-    model.export(format='onnx')
     # print(result)
+    model.fuse()
 
 

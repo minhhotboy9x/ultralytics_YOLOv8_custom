@@ -21,7 +21,7 @@ from tqdm import tqdm
 
 from matplotlib import pyplot as plt
 from ultralytics import YOLO, __version__
-from ultralytics.nn.modules import Detect, C2f, Conv, Bottleneck, C2f_v2
+from ultralytics.nn.modules import Detect, C2f, Conv, Bottleneck, C2f_v2, C2fRep, GhostBottleneck_sc, C2fGhost, RepBottleneck
 from ultralytics.nn.modules_deformable import TDetect
 from ultralytics.nn.tasks import attempt_load_one_weight
 from ultralytics.yolo.engine.model import TASK_MAP
@@ -283,9 +283,7 @@ def _do_train_v2(self: BaseTrainer, world_size=1):
         self.run_callbacks('teardown')
 
 def infer_shortcut(bottleneck):
-    c1 = bottleneck.cv1.conv.in_channels
-    c2 = bottleneck.cv2.conv.out_channels
-    return c1 == c2 and hasattr(bottleneck, 'add') and bottleneck.add
+    return hasattr(bottleneck, 'add') and bottleneck.add
 
 def transfer_weights(c2f, c2f_v2):
     c2f_v2.cv2 = c2f.cv2
@@ -322,7 +320,15 @@ def transfer_weights(c2f, c2f_v2):
 
 def replace_c2f_with_c2f_v2(module):
     for name, child_module in module.named_children():
-        if isinstance(child_module, C2f):
+        if isinstance(child_module, C2fGhost):
+            shortcut = infer_shortcut(child_module.m[0])
+            c2f_v2 = C2f_v2(child_module.cv1.conv.in_channels, child_module.cv2.conv.out_channels,
+                            n=len(child_module.m), shortcut=shortcut,
+                            g=1,
+                            e=0.5)
+            transfer_weights(child_module, c2f_v2)
+            setattr(module, name, c2f_v2)
+        elif isinstance(child_module, C2f):
             # Replace C2f with C2f_v2 while preserving its parameters
             shortcut = infer_shortcut(child_module.m[0])
             c2f_v2 = C2f_v2(child_module.cv1.conv.in_channels, child_module.cv2.conv.out_channels,
@@ -339,7 +345,15 @@ def convert_c2f_v2_to_c2f(c2f_v2):
     c2 = c2f_v2.cv2.conv.out_channels
     c = int(c2 * 0.5)
     n = int(c2f_v2.cv2.conv.in_channels / c) - 2
-    c2f = C2f(c1, c2, n, shortcut=infer_shortcut(c2f_v2.m[0]))
+
+    if isinstance(c2f_v2.m[0], RepBottleneck):
+        c2f = C2fRep(c1, c2, n, shortcut=infer_shortcut(c2f_v2.m[0]))
+    elif isinstance(c2f_v2.m[0], GhostBottleneck_sc):
+        c2f = C2fGhost(c1, c2, n, shortcut=infer_shortcut(c2f_v2.m[0]))
+    else:
+        c2f = C2f(c1, c2, n, shortcut=infer_shortcut(c2f_v2.m[0]))
+    c2f.cv2 = c2f_v2.cv2 
+    c2f.m = c2f_v2.m
     state_dict = c2f.state_dict()
     state_dict_v2 = c2f_v2.state_dict()
     # for name, param in state_dict_v2.items():
@@ -364,7 +378,12 @@ def convert_c2f_v2_to_c2f(c2f_v2):
             setattr(c2f, attr_name, attr_value)
     
     c2f.forward_split = c2f.forward_split_v2
-    c2f.load_state_dict(state_dict)
+    try:
+        c2f.load_state_dict(state_dict)
+        return c2f
+    except RuntimeError as e:
+        # nếu không thể convert về original
+        return c2f_v2
     return c2f
 
 def replace_c2f_v2_with_c2f(module):
@@ -559,17 +578,17 @@ def prune(args):
 
         ignored_layers = []
         unwrapped_parameters = []
-        # for m in model.model.modules():
-        #     if isinstance(m, (Detect,)):
-        #         for modulelist in m.cv2:
-        #             ignored_layers.append(modulelist[-1])
-        #         for modulelist in m.cv3:
-        #             ignored_layers.append(modulelist[-1])
-        #         ignored_layers.append(m.dfl)
-        
         for m in model.model.modules():
             if isinstance(m, (Detect,)):
-                ignored_layers.append(m)
+                for modulelist in m.cv2:
+                    ignored_layers.append(modulelist[-1])
+                for modulelist in m.cv3:
+                    ignored_layers.append(modulelist[-1])
+                ignored_layers.append(m.dfl)
+        
+        # for m in model.model.modules():
+        #     if isinstance(m, (Detect,)):
+        #         ignored_layers.append(m)
                 
         example_inputs = example_inputs.to(model.device)
         pruner = tp.pruner.MetaPruner(

@@ -9,11 +9,11 @@ import onnxruntime
 import time
 
     
-# model = YOLO('coco/train4/weights/best.pt') 
+model = YOLO('pruning/train31/step_0_finetune/weights/last.pt') 
 # model = YOLO('yolov8n.yaml')
 # model = YOLO('yolov8s_relu.pt') 
 # model = YOLO('yolov8n_v2.pt') 
-model = YOLO('asset/trained_model/VOC/v8s_relu_Repbackbone_localprune_0.4_bftrain_VOC.pt') 
+# model = YOLO('pruning/train23/step_0_finetune/weights/best.torchscript') 
 # model = YOLO("asset/trained_model/VOC/v8s_relu_localprune_0,2_iter2_l1_VOC.pt")
 # model = YOLO("asset/trained_model/VOC/v8s_relu_VOC.pt")
 # model = torch.jit.load("asset/trained_model/UA-DETRAC2/v8n_relu.torchscript", map_location=torch.device('cpu'))
@@ -28,18 +28,18 @@ if __name__ == '__main__':
     # run 16 detect v8s
     # model.train(data = 'VOC.yaml', epochs = 300, batch=32, device = 1) 
     # model.train(data = 'coco_vehicle.yaml', epochs = 300, batch=32, device = 0) 
-    # model.train(data = 'VOC.yaml', resume=True, device=1) 
+    model.train(data = 'VOC.yaml', resume=True, device=0) 
 
     # model.fuse()
     # model2.info()
-    model.export(format='onnx')
+    # model.export(format='onnx')
     # metrics = model.val(data = 'DETRAC_fix_roi.yaml', batch=64, device=2, split='test') 
     # metrics = model.val(data = 'coco_vehicle.yaml', batch=64, device=2, split='test') 
-    # metrics = model.val(data = 'VOC.yaml', batch=32, device=2, split='test') 
+    metrics = model.val(data = 'VOC.yaml', batch=32, device=0, split='test') 
     # metrics = model.val(data = 'coco.yaml', batch=32, device=1) 
 
     # metrics = model.val(data = 'UA-DETRAC.yaml', batch=32, device=0, split='val')
-    # print(metrics) 
+    print(metrics) 
     # replace_c2f_with_c2f_v2(model.model)
     # print(model.model)
     # model.train(data = 'UA-DETRAC.yaml', epochs = 300, lr0 = 1e-4, batch=32, device = 1) 
@@ -80,13 +80,13 @@ if __name__ == '__main__':
 # pruning 
 # python benchmarks/prunability/yolov8_pruning.py --model asset/trained_model/VOC/v8s_relu_VOC.pt --data VOC.yaml --iterative-steps 2 --epochs 200 --target-prune-rate 0.2 --sparse-training True --batch 16 --device 3
 # python benchmarks/prunability/yolov8_pruning.py --model yolov8s.yaml --data VOC.yaml --iterative-steps 1 --epochs 300 --target-prune-rate 0.4 --lr0 0.01 --batch 32 --device 1
-# python benchmarks/prunability/yolov8_pruning_bftrain.py --model yolov8s.yaml --data VOC.yaml --iterative-steps 1 --epochs 300 --target-prune-rate 0.4 --lr0 0.01 --batch 32 --device 1
+# python benchmarks/prunability/yolov8_pruning_bftrain.py --model yolov8s.yaml --data VOC.yaml --iterative-steps 1 --epochs 300 --target-prune-rate 0.4 --lr0 0.01 --batch 16 --device 0
 # python benchmarks/prunability/yolov8_pruning.py --model asset/trained_model/UA-DETRAC2/v8s_relu_c2fv2_DETRAC2.pt --data UA-DETRAC.yaml --iterative-steps 3 --epochs 200 --target-prune-rate 0.3 --batch 32 --device 1
 # python benchmarks/prunability/yolov8_pruning_taylor.py --model asset/trained_model/VOC/v8s_relu_VOC.pt --data VOC.yaml --iterative-steps 2 --epochs 200 --target-prune-rate 0.2 --batch 32 --device 3
 
 
 # test
-# python benchmarks/prunability/yolov8_pruning_bftrain.py --model yolov8s.yaml --data coco128.yaml --iterative-steps 1 --epochs 2 --target-prune-rate 0.2 --batch 4 --max-map-drop 1.0 --device 0
+# python benchmarks/prunability/yolov8_pruning_bftrain.py --model yolov8s.yaml --data coco128.yaml --iterative-steps 1 --epochs 2 --target-prune-rate 0.3 --batch 4 --max-map-drop 1.0 --device 0
 
 
 # test quantized model
